@@ -1,0 +1,1682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Tracker</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #000; color: #e0e0e0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // SVG Icons
+        const Upload = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+        );
+        const X = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+        );
+        const Trash2 = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+        );
+        const Home = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+            </svg>
+        );
+        const Plus = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+        );
+        const Edit = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+        );
+
+        window.storage = {
+            async get(key) {
+                try {
+                    const value = localStorage.getItem(key);
+                    return value ? { key, value, shared: false } : null;
+                } catch (e) { return null; }
+            },
+            async set(key, value) {
+                try {
+                    localStorage.setItem(key, value);
+                    return { key, value, shared: false };
+                } catch (e) { return null; }
+            }
+        };
+
+        function PortfolioTracker() {
+            const [trades, setTrades] = useState([]);
+            const [isLoading, setIsLoading] = useState(true);
+            const [showCSVUpload, setShowCSVUpload] = useState(false);
+            const [showAddTrade, setShowAddTrade] = useState(false);
+            const [showEditTrade, setShowEditTrade] = useState(false);
+            const [editingTrade, setEditingTrade] = useState(null);
+            const [processingCSV, setProcessingCSV] = useState(false);
+            const [view, setView] = useState('dashboard');
+            const [tradeView, setTradeView] = useState('all');
+            const [timeframe, setTimeframe] = useState('ALL');
+            const [currentPrices, setCurrentPrices] = useState({});
+            const [fetchingPrices, setFetchingPrices] = useState(false);
+            const [manualPrices, setManualPrices] = useState({});
+            const [editingPrice, setEditingPrice] = useState(null); // symbol being manually edited
+            const [todaysOpeningPrices, setTodaysOpeningPrices] = useState({}); // Prices at start of day for intraday P/L
+            const [prevClosePrices, setPrevClosePrices] = useState({}); // Previous day's closing prices
+            
+            const [formData, setFormData] = useState({
+                symbol: '', name: '', qty: '', entryPrice: '', entryDate: new Date().toISOString().split('T')[0],
+                exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: ''
+            });
+            const [showPartialExit, setShowPartialExit] = useState(false);
+            const [partialExitForm, setPartialExitForm] = useState({
+                qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0]
+            });
+            const [editingPartialExit, setEditingPartialExit] = useState(null);
+            const [expandedTrade, setExpandedTrade] = useState(null);
+            const [sortColumn, setSortColumn] = useState(null);
+            const [sortDirection, setSortDirection] = useState('asc'); // 'asc' or 'desc'
+            const [searchTerm, setSearchTerm] = useState('');
+            const [chartTimeframe, setChartTimeframe] = useState('ALL');
+
+            useEffect(() => { loadTrades(); }, []);
+
+            useEffect(() => {
+                const openTrades = trades.filter(t => !t.exitDate);
+                if (openTrades.length > 0) {
+                    fetchCurrentPrices();
+                    const interval = setInterval(fetchCurrentPrices, 60000);
+                    return () => clearInterval(interval);
+                }
+            }, [trades]);
+
+            const fetchPriceForSymbol = async (symbol) => {
+                // Clean symbol for Yahoo (e.g. BBD-B.TO stays as-is, Canadian stocks use .TO)
+                const yahooSymbol = symbol;
+
+                // Strategy 1: Direct Yahoo Finance v8
+                const attempts = [
+                    () => fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`, { headers: { 'Accept': 'application/json' } }),
+                    () => fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`, { headers: { 'Accept': 'application/json' } }),
+                    // Strategy 2: allorigins CORS proxy
+                    () => fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`)}`),
+                    // Strategy 3: corsproxy.io
+                    () => fetch(`https://corsproxy.io/?${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`)}`),
+                ];
+
+                for (const attempt of attempts) {
+                    try {
+                        const response = await attempt();
+                        if (!response.ok) continue;
+                        const data = await response.json();
+                        const result = data?.chart?.result?.[0];
+                        const currentPrice = result?.meta?.regularMarketPrice;
+                        
+                        // Get previous close from actual chart data
+                        let previousClose = null;
+                        const timestamps = result?.timestamp;
+                        const closes = result?.indicators?.quote?.[0]?.close;
+                        
+                        if (timestamps && closes && closes.length > 1) {
+                            // Get the last non-null close before the most recent one
+                            for (let i = closes.length - 2; i >= 0; i--) {
+                                if (closes[i] !== null && closes[i] !== undefined) {
+                                    previousClose = closes[i];
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (currentPrice && currentPrice > 0) {
+                            console.log(`Got price for ${symbol}: $${currentPrice}, prev close: $${previousClose}`);
+                            return { currentPrice, previousClose };
+                        }
+                    } catch (e) {
+                        // silently try next
+                    }
+                }
+                console.warn(`All price fetch attempts failed for ${symbol}`);
+                return null;
+            };
+
+            const fetchCurrentPrices = async () => {
+                const openTrades = trades.filter(t => !t.exitDate);
+                if (openTrades.length === 0) {
+                    setCurrentPrices({}); // Clear all prices if no open trades
+                    setPrevClosePrices({});
+                    return;
+                }
+                setFetchingPrices(true);
+                const symbols = [...new Set(openTrades.map(t => t.symbol))];
+                const newPrices = {};
+                const newPrevCloses = {};
+                // Only keep prices for currently open positions
+                await Promise.all(symbols.map(async (symbol) => {
+                    // Try to preserve existing price first
+                    if (currentPrices[symbol]) {
+                        newPrices[symbol] = currentPrices[symbol];
+                    }
+                    if (prevClosePrices[symbol]) {
+                        newPrevCloses[symbol] = prevClosePrices[symbol];
+                    }
+                    // Then fetch new price data
+                    const priceData = await fetchPriceForSymbol(symbol);
+                    if (priceData !== null) {
+                        newPrices[symbol] = priceData.currentPrice;
+                        if (priceData.previousClose) {
+                            newPrevCloses[symbol] = priceData.previousClose;
+                        }
+                    }
+                }));
+                setCurrentPrices(newPrices);
+                setPrevClosePrices(newPrevCloses);
+                
+                // Set opening prices if this is the first fetch of the day
+                const today = new Date().toISOString().split('T')[0];
+                if (Object.keys(todaysOpeningPrices).length === 0 && Object.keys(newPrices).length > 0) {
+                    setTodaysOpeningPrices(newPrices);
+                    await window.storage.set('portfolio_opening_prices', JSON.stringify({ date: today, prices: newPrices }));
+                }
+                
+                setFetchingPrices(false);
+            };
+
+            const loadTrades = async () => {
+                setIsLoading(true);
+                const stored = await window.storage.get('portfolio_trades');
+                if (stored?.value) {
+                    try { 
+                        const loadedTrades = JSON.parse(stored.value);
+                        // Migrate old trades to new structure
+                        const migratedTrades = loadedTrades.map(trade => ({
+                            ...trade,
+                            originalQty: trade.originalQty || trade.qty,
+                            partialExits: trade.partialExits || []
+                        }));
+                        setTrades(migratedTrades);
+                    }
+                    catch (e) { console.error('Failed to parse trades:', e); }
+                }
+                
+                // Load today's opening prices
+                const today = new Date().toISOString().split('T')[0];
+                const storedOpeningPrices = await window.storage.get('portfolio_opening_prices');
+                if (storedOpeningPrices?.value) {
+                    try {
+                        const parsed = JSON.parse(storedOpeningPrices.value);
+                        // Check if the stored prices are from today
+                        if (parsed.date === today) {
+                            setTodaysOpeningPrices(parsed.prices);
+                        } else {
+                            // New day - reset opening prices
+                            setTodaysOpeningPrices({});
+                        }
+                    } catch (e) { console.error('Failed to parse opening prices:', e); }
+                }
+                
+                setIsLoading(false);
+            };
+
+            const saveTrades = async (newTrades) => {
+                setTrades(newTrades);
+                await window.storage.set('portfolio_trades', JSON.stringify(newTrades));
+            };
+
+            const extractDividend = (text) => {
+                if (!text) return 0;
+                const patterns = [/(\d+\.?\d*)\$?\s*[Dd]ividend/, /[Dd]ividend[s]?\s*\$?(\d+\.?\d*)/, /(\d+\.?\d*)\s*in\s*dividends/i];
+                for (const pattern of patterns) {
+                    const match = text.match(pattern);
+                    if (match) return parseFloat(match[1]) || 0;
+                }
+                return 0;
+            };
+
+            const parseCSV = (text) => {
+                const lines = text.split('\n').filter(l => l.trim());
+                if (lines.length < 2) throw new Error('CSV must have headers and data');
+                const parseCSVLine = (line) => {
+                    const result = []; let current = ''; let inQuotes = false;
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') inQuotes = !inQuotes;
+                        else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                        else current += char;
+                    }
+                    result.push(current.trim());
+                    return result;
+                };
+                const headers = parseCSVLine(lines[0]);
+                const symbolIdx = headers.findIndex(h => h === 'Symbol');
+                const nameIdx = headers.findIndex(h => h === 'Name');
+                const qtyIdx = headers.findIndex(h => h === 'Qty');
+                const entryDateIdx = headers.findIndex(h => h === 'Entry Date');
+                const entryPriceIdx = headers.findIndex(h => h === 'Entry Price');
+                const exitDateIdx = headers.findIndex(h => h === 'Exit Date');
+                const exitPriceIdx = headers.findIndex(h => h === 'Last');
+                const totalChgIdx = headers.findIndex(h => h === 'Total Chg');
+                const feesIdx = headers.findIndex(h => h === 'Fees');
+                const profitIdx = headers.findIndex(h => h === 'Total Profit');
+                const logIdx = headers.findIndex(h => h === 'Log');
+                if (symbolIdx === -1 || qtyIdx === -1 || entryPriceIdx === -1 || entryDateIdx === -1) {
+                    throw new Error('Missing required columns in CSV');
+                }
+                const parsedTrades = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const values = parseCSVLine(lines[i]);
+                    const symbol = values[symbolIdx];
+                    const qty = parseFloat(values[qtyIdx]);
+                    const entryPrice = parseFloat(values[entryPriceIdx]);
+                    const entryDate = values[entryDateIdx];
+                    if (!symbol || isNaN(qty) || isNaN(entryPrice) || !entryDate) continue;
+                    const exitDate = exitDateIdx !== -1 ? values[exitDateIdx] : '';
+                    
+                    // Calculate exit price from Total Chg if available
+                    let exitPrice = null;
+                    // Always use Total Chg to calculate exit price when available
+                    if (totalChgIdx !== -1 && values[totalChgIdx] && values[totalChgIdx].trim() !== '') {
+                        const totalChgStr = values[totalChgIdx].trim();
+                        // Only parse if it's not "unch" or other non-numeric value
+                        if (totalChgStr.toLowerCase() !== 'unch') {
+                            const totalChg = parseFloat(totalChgStr);
+                            if (!isNaN(totalChg)) {
+                                exitPrice = entryPrice + totalChg;
+                            }
+                        }
+                    }
+                    // If we still don't have an exit price, try the Last column (only for closed trades)
+                    if (exitPrice === null && exitDate && exitPriceIdx !== -1 && values[exitPriceIdx]) {
+                        exitPrice = parseFloat(values[exitPriceIdx]);
+                    }
+                    
+                    const notes = logIdx !== -1 ? values[logIdx] : '';
+                    parsedTrades.push({
+                        id: Date.now() + i,
+                        symbol: symbol.trim(),
+                        name: nameIdx !== -1 ? values[nameIdx].trim() : '',
+                        qty,
+                        originalQty: qty,
+                        entryPrice, entryDate,
+                        exitDate: exitDate || null,
+                        exitPrice: exitPrice,
+                        fees: feesIdx !== -1 ? parseFloat(values[feesIdx]) || 0 : 0,
+                        profit: profitIdx !== -1 ? parseFloat(values[profitIdx]) || 0 : 0,
+                        dividend: extractDividend(notes),
+                        notes: notes.trim(),
+                        partialExits: []
+                    });
+                }
+                return parsedTrades;
+            };
+
+            const handleCSVUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setProcessingCSV(true);
+                try {
+                    const text = await file.text();
+                    const parsedTrades = parseCSV(text);
+                    await saveTrades(parsedTrades);
+                    setShowCSVUpload(false);
+                    setView('trades');
+                    alert(`Successfully imported ${parsedTrades.length} trades!`);
+                } catch (error) {
+                    console.error('CSV parsing error:', error);
+                    alert(`Failed to parse CSV: ${error.message}`);
+                } finally {
+                    setProcessingCSV(false);
+                    e.target.value = '';
+                }
+            };
+
+            const handleAddTrade = async () => {
+                if (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) {
+                    alert('Please fill in all required fields');
+                    return;
+                }
+                const newTrade = {
+                    id: Date.now(),
+                    symbol: formData.symbol.toUpperCase().trim(),
+                    name: formData.name.trim(),
+                    qty: parseFloat(formData.qty),
+                    originalQty: parseFloat(formData.qty),
+                    entryPrice: parseFloat(formData.entryPrice),
+                    entryDate: formData.entryDate,
+                    exitDate: formData.exitDate || null,
+                    exitPrice: formData.exitPrice ? parseFloat(formData.exitPrice) : null,
+                    fees: parseFloat(formData.fees) || 0,
+                    profit: parseFloat(formData.profit) || 0,
+                    dividend: parseFloat(formData.dividend) || 0,
+                    notes: formData.notes.trim(),
+                    partialExits: []
+                };
+                await saveTrades([...trades, newTrade]);
+                setShowAddTrade(false);
+                setFormData({ symbol: '', name: '', qty: '', entryPrice: '', entryDate: new Date().toISOString().split('T')[0],
+                    exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: '' });
+            };
+
+            const handleDeleteTrade = async (id) => {
+                if (confirm('Delete this trade?')) await saveTrades(trades.filter(t => t.id !== id));
+            };
+
+            const handleAddPartialExit = async () => {
+                if (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) {
+                    alert('Please fill in all partial exit fields');
+                    return;
+                }
+                const exitQty = parseFloat(partialExitForm.qty);
+                // Current qty is already the remaining qty after previous partial exits
+                const currentRemaining = editingTrade.qty;
+                
+                if (exitQty > currentRemaining) {
+                    alert(`Only ${currentRemaining} shares remaining!`);
+                    return;
+                }
+
+                const partialExit = {
+                    id: Date.now(),
+                    qty: exitQty,
+                    exitPrice: parseFloat(partialExitForm.exitPrice),
+                    exitDate: partialExitForm.exitDate,
+                    profit: (parseFloat(partialExitForm.exitPrice) - editingTrade.entryPrice) * exitQty
+                };
+
+                const updatedTrade = {
+                    ...editingTrade,
+                    partialExits: [...(editingTrade.partialExits || []), partialExit],
+                    qty: currentRemaining - exitQty
+                };
+
+                // Update formData profit to reflect the new partial exit
+                const currentProfit = parseFloat(formData.profit) || 0;
+                const newProfit = currentProfit + partialExit.profit;
+                setFormData({...formData, profit: newProfit.toString()});
+
+                await saveTrades(trades.map(t => t.id === editingTrade.id ? updatedTrade : t));
+                setEditingTrade(updatedTrade);
+                setShowPartialExit(false);
+                setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] });
+            };
+
+            const handleEditPartialExit = (partialExit) => {
+                setEditingPartialExit(partialExit);
+                setPartialExitForm({
+                    qty: partialExit.qty.toString(),
+                    exitPrice: partialExit.exitPrice.toString(),
+                    exitDate: partialExit.exitDate
+                });
+                setShowPartialExit(true);
+            };
+
+            const handleUpdatePartialExit = async () => {
+                if (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) {
+                    alert('Please fill in all partial exit fields');
+                    return;
+                }
+                
+                const exitQty = parseFloat(partialExitForm.qty);
+                const oldExit = editingPartialExit;
+                const qtyDifference = exitQty - oldExit.qty;
+                
+                // Check if we have enough shares
+                if (qtyDifference > editingTrade.qty) {
+                    alert(`Only ${editingTrade.qty} shares remaining!`);
+                    return;
+                }
+
+                const updatedPartialExit = {
+                    ...oldExit,
+                    qty: exitQty,
+                    exitPrice: parseFloat(partialExitForm.exitPrice),
+                    exitDate: partialExitForm.exitDate,
+                    profit: (parseFloat(partialExitForm.exitPrice) - editingTrade.entryPrice) * exitQty
+                };
+
+                const profitDifference = updatedPartialExit.profit - oldExit.profit;
+
+                const updatedTrade = {
+                    ...editingTrade,
+                    partialExits: editingTrade.partialExits.map(pe => 
+                        pe.id === oldExit.id ? updatedPartialExit : pe
+                    ),
+                    qty: editingTrade.qty - qtyDifference
+                };
+
+                // Update formData profit to reflect the change
+                const currentProfit = parseFloat(formData.profit) || 0;
+                const newProfit = currentProfit + profitDifference;
+                setFormData({...formData, profit: newProfit.toString()});
+
+                await saveTrades(trades.map(t => t.id === editingTrade.id ? updatedTrade : t));
+                setEditingTrade(updatedTrade);
+                setEditingPartialExit(null);
+                setShowPartialExit(false);
+                setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] });
+            };
+
+            const handleDeletePartialExit = async (partialExitId) => {
+                if (!confirm('Delete this partial exit?')) return;
+                
+                const partialExit = editingTrade.partialExits.find(pe => pe.id === partialExitId);
+                const updatedTrade = {
+                    ...editingTrade,
+                    partialExits: editingTrade.partialExits.filter(pe => pe.id !== partialExitId),
+                    qty: editingTrade.qty + partialExit.qty
+                };
+
+                // Update formData profit by subtracting the deleted partial exit's profit
+                const currentProfit = parseFloat(formData.profit) || 0;
+                const newProfit = currentProfit - partialExit.profit;
+                setFormData({...formData, profit: newProfit.toString()});
+
+                await saveTrades(trades.map(t => t.id === editingTrade.id ? updatedTrade : t));
+                setEditingTrade(updatedTrade);
+            };
+
+            const handleEditTrade = (trade) => {
+                setEditingTrade(trade);
+                setFormData({
+                    symbol: trade.symbol,
+                    name: trade.name,
+                    qty: trade.qty.toString(),
+                    entryPrice: trade.entryPrice.toString(),
+                    entryDate: trade.entryDate,
+                    exitDate: trade.exitDate || '',
+                    exitPrice: trade.exitPrice ? trade.exitPrice.toString() : '',
+                    fees: trade.fees.toString(),
+                    profit: trade.profit.toString(),
+                    dividend: trade.dividend.toString(),
+                    notes: trade.notes
+                });
+                setShowEditTrade(true);
+            };
+
+            const handleUpdateTrade = async () => {
+                if (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) {
+                    alert('Please fill in all required fields');
+                    return;
+                }
+                const updatedTrade = {
+                    ...editingTrade,
+                    symbol: formData.symbol.toUpperCase().trim(),
+                    name: formData.name.trim(),
+                    // Don't update qty here - it's managed by partial exits
+                    // qty: parseFloat(formData.qty),
+                    entryPrice: parseFloat(formData.entryPrice),
+                    entryDate: formData.entryDate,
+                    exitDate: formData.exitDate || null,
+                    exitPrice: formData.exitPrice ? parseFloat(formData.exitPrice) : null,
+                    fees: parseFloat(formData.fees) || 0,
+                    profit: parseFloat(formData.profit) || 0,
+                    dividend: parseFloat(formData.dividend) || 0,
+                    notes: formData.notes.trim()
+                };
+                await saveTrades(trades.map(t => t.id === editingTrade.id ? updatedTrade : t));
+                setShowEditTrade(false);
+                setEditingTrade(null);
+                setFormData({ symbol: '', name: '', qty: '', entryPrice: '', entryDate: new Date().toISOString().split('T')[0],
+                    exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: '' });
+            };
+
+            const handleClearPortfolio = async () => {
+                if (confirm('⚠️ Delete ALL trades? This cannot be undone!')) {
+                    if (confirm('Last chance! Delete everything?')) {
+                        await saveTrades([]);
+                        setView('dashboard');
+                    }
+                }
+            };
+
+            const calculateMetrics = (tradesList) => {
+                const openTrades = tradesList.filter(t => !t.exitDate);
+                const closedTrades = tradesList.filter(t => t.exitDate);
+                
+                // Calculate realized profit (capital gains only from fully closed trades)
+                const realizedProfit = closedTrades.reduce((sum, t) => sum + t.profit, 0);
+                
+                // Calculate profit from partial exits
+                const partialExitProfit = tradesList.reduce((sum, t) => {
+                    if (t.partialExits && t.partialExits.length > 0) {
+                        return sum + t.partialExits.reduce((pSum, pe) => pSum + pe.profit, 0);
+                    }
+                    return sum;
+                }, 0);
+                
+                // Total capital gains = fully closed + partial exits
+                const totalCapitalGains = realizedProfit + partialExitProfit;
+                
+                // Total dividends
+                const totalDividends = tradesList.reduce((sum, t) => sum + (t.dividend || 0), 0);
+                
+                // Total profit = capital gains + dividends
+                const totalProfit = totalCapitalGains + totalDividends;
+                
+                const totalFees = tradesList.reduce((sum, t) => sum + t.fees, 0);
+                const totalWins = closedTrades.filter(t => t.profit > 0).length;
+                const totalLosses = closedTrades.filter(t => t.profit < 0).length;
+                const winRate = totalWins + totalLosses > 0 ? (totalWins / (totalWins + totalLosses)) * 100 : 0;
+                let unrealizedPL = 0;
+                openTrades.forEach(trade => {
+                    const currentPrice = manualPrices[trade.symbol] || currentPrices[trade.symbol] || trade.entryPrice;
+                    const pl = (currentPrice - trade.entryPrice) * trade.qty - trade.fees;
+                    unrealizedPL += pl;
+                });
+                
+                // Calculate today's P/L - sum of (currentPrice - prevClose) * qty for each open trade
+                // This matches exactly what the Chg column shows per row
+                let todaysPL = 0;
+                openTrades.forEach(trade => {
+                    const liveCurrentPrice = currentPrices[trade.symbol]; // live price only, no manual fallback
+                    const prevClose = prevClosePrices[trade.symbol];
+                    if (liveCurrentPrice && prevClose) {
+                        todaysPL += (liveCurrentPrice - prevClose) * trade.qty;
+                    }
+                });
+                
+                return { 
+                    realizedProfit: totalCapitalGains,
+                    totalProfit,
+                    unrealizedPL, 
+                    totalDividends, 
+                    totalFees, 
+                    winRate,
+                    totalTrades: closedTrades.length, 
+                    openPositions: openTrades.length, 
+                    wins: totalWins, 
+                    losses: totalLosses,
+                    todaysPL
+                };
+            };
+
+            const filterTradesByTimeframe = (tradesList) => {
+                if (timeframe === 'ALL') return tradesList;
+                const now = new Date(); const cutoff = new Date();
+                switch (timeframe) {
+                    case '1M': cutoff.setMonth(now.getMonth() - 1); break;
+                    case '3M': cutoff.setMonth(now.getMonth() - 3); break;
+                    case '6M': cutoff.setMonth(now.getMonth() - 6); break;
+                    case '1Y': cutoff.setFullYear(now.getFullYear() - 1); break;
+                    case 'YTD': cutoff.setMonth(0); cutoff.setDate(1); break;
+                    default: return tradesList;
+                }
+                return tradesList.filter(t => new Date(t.entryDate) >= cutoff);
+            };
+
+            const filteredTrades = filterTradesByTimeframe(trades);
+            const metrics = calculateMetrics(filteredTrades);
+            
+            const chartData = useMemo(() => {
+                const now = new Date();
+                const cutoff = new Date();
+                switch (chartTimeframe) {
+                    case '5D':  cutoff.setDate(now.getDate() - 5); break;
+                    case '1M':  cutoff.setMonth(now.getMonth() - 1); break;
+                    case '3M':  cutoff.setMonth(now.getMonth() - 3); break;
+                    case '6M':  cutoff.setMonth(now.getMonth() - 6); break;
+                    case 'YTD': cutoff.setMonth(0); cutoff.setDate(1); break;
+                    case '1Y':  cutoff.setFullYear(now.getFullYear() - 1); break;
+                    case '3Y':  cutoff.setFullYear(now.getFullYear() - 3); break;
+                    default:    cutoff.setFullYear(2000); break;
+                }
+                const allClosed = trades
+                    .filter(t => t.exitDate && t.profit !== undefined)
+                    .sort((a, b) => new Date(a.exitDate) - new Date(b.exitDate));
+                if (allClosed.length === 0) return [];
+                
+                // Get trades within the timeframe
+                const windowTrades = allClosed.filter(t => new Date(t.exitDate) >= cutoff);
+                
+                // Start from $0 for this timeframe
+                let cumulative = 0;
+                const points = [{ date: cutoff.toISOString().split('T')[0], profit: 0 }];
+                
+                windowTrades.forEach(trade => {
+                    cumulative += (trade.profit || 0);
+                    points.push({ date: trade.exitDate, profit: parseFloat(cumulative.toFixed(2)) });
+                });
+                
+                return points;
+            }, [trades, chartTimeframe]);
+
+            const handleExportCSV = () => {
+                const headers = ['Symbol','Name','Qty','Original Qty','Entry Price','Exit Price','Entry Date','Exit Date','Profit','Dividends','Fees','Notes'];
+                const rows = trades.map(t => [
+                    t.symbol,
+                    `"${(t.name || '').replace(/"/g, '""')}"`,
+                    t.qty,
+                    t.originalQty || t.qty,
+                    t.entryPrice,
+                    t.exitPrice || '',
+                    t.entryDate,
+                    t.exitDate || '',
+                    t.profit,
+                    t.dividend || 0,
+                    t.fees,
+                    `"${(t.notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`
+                ]);
+                const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `portfolio-export-${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const handleSort = (column) => {
+                if (sortColumn === column) {
+                    // Toggle direction if clicking same column
+                    setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                } else {
+                    // New column, default to ascending
+                    setSortColumn(column);
+                    setSortDirection('asc');
+                }
+            };
+
+            const sortTrades = (tradesToSort) => {
+                if (!sortColumn) return tradesToSort;
+                
+                return [...tradesToSort].sort((a, b) => {
+                    let aVal, bVal;
+                    
+                    switch (sortColumn) {
+                        case 'symbol':
+                            aVal = a.symbol.toLowerCase();
+                            bVal = b.symbol.toLowerCase();
+                            break;
+                        case 'name':
+                            aVal = (a.name || '').toLowerCase();
+                            bVal = (b.name || '').toLowerCase();
+                            break;
+                        case 'qty':
+                            aVal = a.qty;
+                            bVal = b.qty;
+                            break;
+                        case 'originalQty':
+                            aVal = a.originalQty || a.qty;
+                            bVal = b.originalQty || b.qty;
+                            break;
+                        case 'entryPrice':
+                            aVal = a.entryPrice;
+                            bVal = b.entryPrice;
+                            break;
+                        case 'exitPrice':
+                            aVal = a.exitPrice || 0;
+                            bVal = b.exitPrice || 0;
+                            break;
+                        case 'entryDate':
+                            aVal = new Date(a.entryDate);
+                            bVal = new Date(b.entryDate);
+                            break;
+                        case 'exitDate':
+                            aVal = a.exitDate ? new Date(a.exitDate) : new Date('9999-12-31');
+                            bVal = b.exitDate ? new Date(b.exitDate) : new Date('9999-12-31');
+                            break;
+                        case 'marketValue':
+                            // For closed trades: qty * exitPrice
+                            // For open trades: qty * currentPrice
+                            aVal = a.exitDate ? (a.qty * (a.exitPrice || a.entryPrice)) : (a.qty * (manualPrices[a.symbol] || currentPrices[a.symbol] || a.entryPrice));
+                            bVal = b.exitDate ? (b.qty * (b.exitPrice || b.entryPrice)) : (b.qty * (manualPrices[b.symbol] || currentPrices[b.symbol] || b.entryPrice));
+                            break;
+                        case 'profit':
+                            aVal = a.profit;
+                            bVal = b.profit;
+                            break;
+                        case 'totalProfit':
+                            aVal = a.profit + (a.dividend || 0);
+                            bVal = b.profit + (b.dividend || 0);
+                            break;
+                        case 'changePercent':
+                            // For open trades: compare current price to entry
+                            // For closed trades: compare exit price to entry
+                            const aPrice = a.exitDate ? (a.exitPrice || a.entryPrice) : (manualPrices[a.symbol] || currentPrices[a.symbol] || a.entryPrice);
+                            const bPrice = b.exitDate ? (b.exitPrice || b.entryPrice) : (manualPrices[b.symbol] || currentPrices[b.symbol] || b.entryPrice);
+                            aVal = ((aPrice - a.entryPrice) / a.entryPrice) * 100;
+                            bVal = ((bPrice - b.entryPrice) / b.entryPrice) * 100;
+                            break;
+                        case 'totalChg':
+                            // Exit price - Entry price (for all trades)
+                            const aTotalChgPrice = a.exitDate ? (a.exitPrice || a.entryPrice) : (manualPrices[a.symbol] || currentPrices[a.symbol] || a.entryPrice);
+                            const bTotalChgPrice = b.exitDate ? (b.exitPrice || b.entryPrice) : (manualPrices[b.symbol] || currentPrices[b.symbol] || b.entryPrice);
+                            aVal = aTotalChgPrice - a.entryPrice;
+                            bVal = bTotalChgPrice - b.entryPrice;
+                            break;
+                        case 'chg':
+                            // Current day change (only for open trades, 0 for closed)
+                            const aCurr = manualPrices[a.symbol] || currentPrices[a.symbol] || 0;
+                            const bCurr = manualPrices[b.symbol] || currentPrices[b.symbol] || 0;
+                            aVal = a.exitDate ? 0 : (aCurr - (prevClosePrices[a.symbol] || aCurr));
+                            bVal = b.exitDate ? 0 : (bCurr - (prevClosePrices[b.symbol] || bCurr));
+                            break;
+                        case 'todaysProfit':
+                            // Today's profit = (current - prevClose) * qty (only for open trades)
+                            const aCurrPrice = manualPrices[a.symbol] || currentPrices[a.symbol] || 0;
+                            const bCurrPrice = manualPrices[b.symbol] || currentPrices[b.symbol] || 0;
+                            const aDayChg = a.exitDate ? 0 : (aCurrPrice - (prevClosePrices[a.symbol] || aCurrPrice));
+                            const bDayChg = b.exitDate ? 0 : (bCurrPrice - (prevClosePrices[b.symbol] || bCurrPrice));
+                            aVal = aDayChg * a.qty;
+                            bVal = bDayChg * b.qty;
+                            break;
+                        default:
+                            return 0;
+                    }
+                    
+                    if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            };
+
+            let displayTrades = filteredTrades;
+            if (tradeView === 'open') displayTrades = filteredTrades.filter(t => !t.exitDate);
+            if (tradeView === 'closed') displayTrades = filteredTrades.filter(t => t.exitDate);
+
+            // Apply search filter
+            if (searchTerm.trim()) {
+                displayTrades = displayTrades.filter(t => 
+                    t.symbol.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    (t.name && t.name.toLowerCase().includes(searchTerm.toLowerCase()))
+                );
+            }
+
+            // Apply sorting
+            displayTrades = sortTrades(displayTrades);
+
+            // Only show split columns (Orig Qty / Remaining) if we're showing open trades AND any have partial exits
+            const showSplitQtyColumns = tradeView !== 'closed' && displayTrades.some(t => !t.exitDate && (t.partialExits || []).length > 0);
+            
+            // Only show Chg column (intraday change) when viewing open trades
+            const showChgColumn = tradeView !== 'closed';
+
+            if (isLoading) {
+                return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+                    <div style={{ fontSize: '1.2rem' }}>Loading...</div>
+                </div>;
+            }
+
+            if (view === 'dashboard') {
+                return (
+                    <div style={{ minHeight: '100vh', padding: '2rem' }}>
+                        <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+                            <h1 style={{ fontSize: '2.5rem', fontWeight: '800', marginBottom: '3rem', textAlign: 'center' }}>
+                                PORTFOLIO TRACKER
+                            </h1>
+
+                            {trades.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '4rem 2rem', background: '#0a0a0a', borderRadius: '8px', border: '1px solid #1a1a1a' }}>
+                                    <div style={{ fontSize: '1.5rem', fontWeight: '700', marginBottom: '1rem' }}>No trades yet</div>
+                                    <div style={{ fontSize: '1rem', color: '#666', marginBottom: '2rem' }}>Upload a CSV or add your first trade manually</div>
+                                    <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                        <button onClick={() => setShowCSVUpload(true)} style={{ background: '#00ff88', color: '#000', border: 'none', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Upload size={20} /> Upload CSV
+                                        </button>
+                                        <button onClick={() => setShowAddTrade(true)} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Plus size={20} /> Add Trade
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Today's P/L</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.todaysPL >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                {metrics.todaysPL >= 0 ? '+' : ''}${metrics.todaysPL.toFixed(2)}
+                                            </div>
+                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.5rem' }}>
+                                                Intraday Movement
+                                            </div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Realized Profit</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.realizedProfit >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                ${metrics.realizedProfit.toFixed(2)}
+                                            </div>
+                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.5rem' }}>Capital Gains Only</div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Profit</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.totalProfit >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                ${metrics.totalProfit.toFixed(2)}
+                                            </div>
+                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.5rem' }}>Incl. ${metrics.totalDividends.toFixed(2)} Dividends</div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Unrealized P/L</div>
+                                                <button onClick={fetchCurrentPrices} disabled={fetchingPrices} title="Refresh live prices" style={{ background: 'transparent', border: 'none', color: fetchingPrices ? '#444' : '#00ccff', cursor: fetchingPrices ? 'not-allowed' : 'pointer', fontSize: '0.85rem', padding: 0 }}>
+                                                    {fetchingPrices ? '⟳' : '↻'}
+                                                </button>
+                                            </div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.unrealizedPL >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                {metrics.unrealizedPL >= 0 ? '+' : ''}${metrics.unrealizedPL.toFixed(2)}
+                                            </div>
+                                            <div style={{ fontSize: '0.7rem', color: '#555', marginTop: '0.25rem' }}>
+                                                {fetchingPrices ? 'Fetching live prices...' : 'Click ↻ to refresh'}
+                                            </div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Dividends</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: '#00ccff' }}>${metrics.totalDividends.toFixed(2)}</div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Win Rate</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.winRate.toFixed(1)}%</div>
+                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.25rem' }}>{metrics.wins}W / {metrics.losses}L</div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Trades</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.totalTrades}</div>
+                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.25rem' }}>{metrics.openPositions} open</div>
+                                        </div>
+                                        <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '1.5rem', border: '1px solid #1a1a1a' }}>
+                                            <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Fees</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: '#ff4444' }}>${metrics.totalFees.toFixed(2)}</div>
+                                        </div>
+                                    </div>
+
+                                    {(() => {
+                                        const ChartComponent = () => {
+                                            const canvasRef = React.useRef(null);
+                                            const chartRef = React.useRef(null);
+                                            
+                                            React.useEffect(() => {
+                                                if (!canvasRef.current || !window.Chart || chartData.length < 2) return;
+                                                
+                                                // Destroy previous chart if it exists
+                                                if (chartRef.current) {
+                                                    chartRef.current.destroy();
+                                                }
+                                                
+                                                const ctx = canvasRef.current.getContext('2d');
+                                                chartRef.current = new window.Chart(ctx, {
+                                                    type: 'line',
+                                                    data: {
+                                                        labels: chartData.map(d => d.date),
+                                                        datasets: [{
+                                                            label: 'Cumulative Profit',
+                                                            data: chartData.map(d => d.profit),
+                                                            borderColor: '#00ff88',
+                                                            backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                                                            borderWidth: 2,
+                                                            pointRadius: chartData.length <= 50 ? 3 : 0,
+                                                            pointBackgroundColor: '#00ff88',
+                                                            pointHoverRadius: 5,
+                                                            tension: 0.1,
+                                                            fill: true
+                                                        }]
+                                                    },
+                                                    options: {
+                                                        responsive: true,
+                                                        maintainAspectRatio: false,
+                                                        plugins: {
+                                                            legend: { display: false },
+                                                            tooltip: {
+                                                                backgroundColor: '#111',
+                                                                borderColor: '#333',
+                                                                borderWidth: 1,
+                                                                titleColor: '#999',
+                                                                bodyColor: '#e0e0e0',
+                                                                callbacks: {
+                                                                    label: (context) => `$${context.parsed.y.toFixed(2)}`
+                                                                }
+                                                            }
+                                                        },
+                                                        scales: {
+                                                            x: {
+                                                                grid: { color: '#1a1a1a', drawBorder: false },
+                                                                ticks: { color: '#555', font: { size: 10 } }
+                                                            },
+                                                            y: {
+                                                                grid: { color: '#1a1a1a', drawBorder: false },
+                                                                ticks: { 
+                                                                    color: '#555', 
+                                                                    font: { size: 10 },
+                                                                    callback: (value) => `$${value >= 1000 ? (value/1000).toFixed(1)+'k' : value.toFixed(0)}`
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                                
+                                                return () => {
+                                                    if (chartRef.current) {
+                                                        chartRef.current.destroy();
+                                                    }
+                                                };
+                                            }, [chartData]);
+                                            
+                                            return (
+                                                <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '2rem', border: '1px solid #1a1a1a', marginBottom: '2rem' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+                                                        <h3 style={{ fontSize: '1.2rem', fontWeight: '700', margin: 0 }}>Cumulative Profit Over Time</h3>
+                                                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                            {['5D','1M','3M','6M','YTD','1Y','3Y','ALL'].map(tf => (
+                                                                <button key={tf} onClick={() => setChartTimeframe(tf)} style={{
+                                                                    background: chartTimeframe === tf ? '#00ff88' : 'transparent',
+                                                                    color: chartTimeframe === tf ? '#000' : '#666',
+                                                                    border: `1px solid ${chartTimeframe === tf ? '#00ff88' : '#333'}`,
+                                                                    padding: '0.3rem 0.65rem', borderRadius: '4px', cursor: 'pointer',
+                                                                    fontWeight: '600', fontSize: '0.75rem'
+                                                                }}>{tf}</button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    {chartData.length < 2 ? (
+                                                        <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#444', fontSize: '0.9rem' }}>
+                                                            No closed trades in this timeframe
+                                                        </div>
+                                                    ) : (
+                                                        <div style={{ height: '300px', position: 'relative' }}>
+                                                            <canvas ref={canvasRef}></canvas>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        };
+                                        
+                                        if (!window.Chart) return (
+                                            <div style={{ background: '#0a0a0a', borderRadius: '8px', padding: '2rem', border: '1px solid #1a1a1a', marginBottom: '2rem', textAlign: 'center', color: '#666' }}>
+                                                Chart library not loaded. Try refreshing the page.
+                                            </div>
+                                        );
+                                        
+                                        return <ChartComponent />;
+                                    })()}
+
+                                    <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                        <button onClick={() => setView('trades')} style={{ background: '#00ff88', color: '#000', border: 'none', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>View All Trades</button>
+                                        <button onClick={() => setShowAddTrade(true)} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>Add Trade</button>
+                                        <button onClick={() => setShowCSVUpload(true)} style={{ background: '#1a1a1a', color: '#00ccff', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Upload size={20} /> Upload CSV
+                                        </button>
+                                        <button onClick={handleExportCSV} style={{ background: '#1a1a1a', color: '#00ff88', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Upload size={20} style={{ transform: 'rotate(180deg)' }} /> Export CSV
+                                        </button>
+                                        <button onClick={handleClearPortfolio} style={{ background: 'transparent', color: '#ff4444', border: '1px solid #ff4444', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>Clear Portfolio</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {showAddTrade && (
+                            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1000 }}>
+                                <div style={{ background: '#111', borderRadius: '8px', padding: '2rem', maxWidth: '600px', width: '100%', border: '1px solid #1a1a1a', maxHeight: '90vh', overflow: 'auto' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+                                        <h3 style={{ margin: 0, fontSize: '1.5rem' }}>ADD TRADE</h3>
+                                        <button onClick={() => setShowAddTrade(false)} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}><X size={24} /></button>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Symbol *</label>
+                                            <input type="text" placeholder="AAPL" value={formData.symbol} onChange={(e) => setFormData({...formData, symbol: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', fontSize: '1rem' }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Qty *</label>
+                                            <input type="number" placeholder="100" value={formData.qty} onChange={(e) => setFormData({...formData, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        </div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Name</label>
+                                        <input type="text" placeholder="Apple Inc" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Price *</label>
+                                            <input type="number" step="0.01" placeholder="150.25" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Date *</label>
+                                            <input type="date" value={formData.entryDate} onChange={(e) => setFormData({...formData, entryDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
+                                            <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price</label>
+                                            <input type="number" step="0.01" placeholder="160.50" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Profit</label>
+                                            <input type="number" step="0.01" value={formData.profit} onChange={(e) => setFormData({...formData, profit: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
+                                            <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Fees</label>
+                                            <input type="number" step="0.01" value={formData.fees} onChange={(e) => setFormData({...formData, fees: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        </div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Notes</label>
+                                        <textarea placeholder="Trade notes..." value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', minHeight: '80px', fontFamily: 'inherit' }} /></div>
+                                        <button onClick={handleAddTrade} disabled={!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate} style={{ background: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? '#333' : '#00ff88', color: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? '#666' : '#000', border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? 'not-allowed' : 'pointer', fontWeight: '600', marginTop: '1rem' }}>ADD TRADE</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {showCSVUpload && (
+                            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1000 }}>
+                                <div style={{ background: '#111', borderRadius: '8px', padding: '2rem', maxWidth: '600px', width: '100%', border: '1px solid #1a1a1a' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+                                        <h3 style={{ margin: 0, fontSize: '1.5rem' }}>UPLOAD CSV</h3>
+                                        <button onClick={() => setShowCSVUpload(false)} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}><X size={24} /></button>
+                                    </div>
+                                    <div style={{ marginBottom: '1.5rem', color: '#999', fontSize: '0.9rem', lineHeight: '1.6' }}>
+                                        <strong style={{ color: '#00ff88' }}>Expected CSV format:</strong><br/><br/>
+                                        <strong>Required:</strong> Symbol, Qty, Entry Price, Entry Date<br/>
+                                        <strong>Optional:</strong> Name, Exit Date, Fees, Total Profit, Log
+                                    </div>
+                                    <label style={{ display: 'block', padding: '3rem', border: '2px dashed #333', borderRadius: '8px', textAlign: 'center', cursor: processingCSV ? 'not-allowed' : 'pointer' }}>
+                                        <input type="file" accept=".csv" onChange={handleCSVUpload} disabled={processingCSV} style={{ display: 'none' }} />
+                                        <Upload size={48} style={{ margin: '0 auto 1rem', display: 'block', color: '#00ccff' }} />
+                                        <div style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '0.5rem' }}>
+                                            {processingCSV ? 'Processing...' : 'Click to upload CSV'}
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+
+            // Trades View - CONTINUED IN PART 2 due to length
+            return (
+                <div style={{ minHeight: '100vh', padding: '2rem' }}>
+                    <div style={{ maxWidth: '1600px', margin: '0 auto' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                <button onClick={() => setView('dashboard')} style={{ background: 'transparent', border: '1px solid #333', color: '#666', padding: '0.5rem', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}><Home size={24} /></button>
+                                <h1 style={{ fontSize: '2rem', fontWeight: '800', margin: 0 }}>ALL TRADES</h1>
+                            </div>
+                            <div style={{ display: 'flex', gap: '1rem' }}>
+                                <button onClick={() => setShowAddTrade(true)} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #333', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Plus size={20} /> Add Trade</button>
+                                <button onClick={() => setShowCSVUpload(true)} style={{ background: '#1a1a1a', color: '#00ccff', border: '1px solid #333', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Upload size={20} /> Upload CSV</button>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                <input 
+                                    type="text" 
+                                    placeholder="Search symbol or name..." 
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    style={{ 
+                                        padding: '0.5rem 1rem', 
+                                        background: '#0a0a0a', 
+                                        border: '1px solid #333', 
+                                        borderRadius: '4px', 
+                                        color: '#e0e0e0', 
+                                        fontSize: '0.85rem',
+                                        width: '250px'
+                                    }}
+                                />
+                                {tradeView === 'open' && (
+                                    <button 
+                                        onClick={fetchCurrentPrices} 
+                                        disabled={fetchingPrices}
+                                        title="Refresh live prices"
+                                        style={{ 
+                                            background: 'transparent', 
+                                            border: '1px solid #333', 
+                                            color: fetchingPrices ? '#444' : '#00ccff', 
+                                            padding: '0.5rem 0.75rem', 
+                                            borderRadius: '4px', 
+                                            cursor: fetchingPrices ? 'not-allowed' : 'pointer', 
+                                            fontSize: '0.9rem',
+                                            fontWeight: '600'
+                                        }}
+                                    >
+                                        {fetchingPrices ? '⟳' : '↻'}
+                                    </button>
+                                )}
+                            </div>
+                            
+                            {tradeView === 'open' && (
+                                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Equity</div>
+                                        <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#00ccff' }}>
+                                            ${(() => {
+                                                const openTrades = trades.filter(t => !t.exitDate);
+                                                return openTrades.reduce((sum, trade) => {
+                                                    const currentPrice = manualPrices[trade.symbol] || currentPrices[trade.symbol] || trade.entryPrice;
+                                                    return sum + (trade.qty * currentPrice) + (trade.dividend || 0);
+                                                }, 0).toFixed(2);
+                                            })()}
+                                        </div>
+                                    </div>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Today's P/L</div>
+                                        <div style={{ fontSize: '1.5rem', fontWeight: '700', color: metrics.todaysPL >= 0 ? '#00ff88' : '#ff4444' }}>
+                                            {metrics.todaysPL >= 0 ? '+' : ''}${metrics.todaysPL.toFixed(2)}
+                                        </div>
+                                    </div>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Unrealized P/L</div>
+                                        <div style={{ fontSize: '1.5rem', fontWeight: '700', color: metrics.unrealizedPL >= 0 ? '#00ff88' : '#ff4444' }}>
+                                            {metrics.unrealizedPL >= 0 ? '+' : ''}${metrics.unrealizedPL.toFixed(2)}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                    <button onClick={() => setTradeView('all')} style={{ background: tradeView === 'all' ? '#00ff88' : 'transparent', color: tradeView === 'all' ? '#000' : '#666', border: `1px solid ${tradeView === 'all' ? '#00ff88' : '#333'}`, padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}>All ({filteredTrades.length})</button>
+                                    <button onClick={() => setTradeView('open')} style={{ background: tradeView === 'open' ? '#00ff88' : 'transparent', color: tradeView === 'open' ? '#000' : '#666', border: `1px solid ${tradeView === 'open' ? '#00ff88' : '#333'}`, padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}>Open ({filteredTrades.filter(t => !t.exitDate).length})</button>
+                                    <button onClick={() => setTradeView('closed')} style={{ background: tradeView === 'closed' ? '#00ff88' : 'transparent', color: tradeView === 'closed' ? '#000' : '#666', border: `1px solid ${tradeView === 'closed' ? '#00ff88' : '#333'}`, padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}>Closed ({filteredTrades.filter(t => t.exitDate).length})</button>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    {['1M', '3M', '6M', 'YTD', '1Y', 'ALL'].map(tf => (
+                                        <button key={tf} onClick={() => setTimeframe(tf)} style={{ background: timeframe === tf ? '#00ccff' : 'transparent', color: timeframe === tf ? '#000' : '#666', border: `1px solid ${timeframe === tf ? '#00ccff' : '#333'}`, padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>{tf}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ background: '#0a0a0a', borderRadius: '8px', border: '1px solid #1a1a1a', overflow: 'hidden' }}>
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                        <tr style={{ background: '#111', borderBottom: '1px solid #1a1a1a' }}>
+                                            <th onClick={() => handleSort('symbol')} style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Symbol {sortColumn === 'symbol' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th onClick={() => handleSort('name')} style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Name {sortColumn === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            {showSplitQtyColumns ? (
+                                                <>
+                                                    <th onClick={() => handleSort('originalQty')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                        Orig Qty {sortColumn === 'originalQty' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                                    </th>
+                                                    <th onClick={() => handleSort('qty')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                        Remaining {sortColumn === 'qty' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                                    </th>
+                                                </>
+                                            ) : (
+                                                <th onClick={() => handleSort('qty')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                    Qty {sortColumn === 'qty' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                                </th>
+                                            )}
+                                            <th onClick={() => handleSort('entryPrice')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Avg Cost {sortColumn === 'entryPrice' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th onClick={() => handleSort('exitPrice')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                {tradeView === 'open' ? 'Last' : 'Exit'} {sortColumn === 'exitPrice' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            {showChgColumn && (
+                                                <th onClick={() => handleSort('chg')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                    Chg {sortColumn === 'chg' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                                </th>
+                                            )}
+                                            {showChgColumn && (
+                                                <th onClick={() => handleSort('todaysProfit')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                    Profit {sortColumn === 'todaysProfit' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                                </th>
+                                            )}
+                                            <th onClick={() => handleSort('totalChg')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Total Chg {sortColumn === 'totalChg' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th onClick={() => handleSort('changePercent')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Chg % {sortColumn === 'changePercent' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th onClick={() => handleSort('marketValue')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Market Value {sortColumn === 'marketValue' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th onClick={() => handleSort('profit')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Profit {sortColumn === 'profit' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th onClick={() => handleSort('totalProfit')} style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}>
+                                                Total Profit {sortColumn === 'totalProfit' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                            </th>
+                                            <th style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase' }}>Status</th>
+                                            <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', color: '#666', fontWeight: '600', textTransform: 'uppercase' }}>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {displayTrades.map((trade, idx) => {
+                                            const isOpen = !trade.exitDate;
+                                            const livePrice = currentPrices[trade.symbol];
+                                            const manualPrice = manualPrices[trade.symbol];
+                                            const currentPrice = isOpen
+                                                ? (manualPrice || livePrice || trade.entryPrice)
+                                                : (trade.exitPrice || trade.entryPrice);
+                                            const priceSource = isOpen
+                                                ? (manualPrice ? 'manual' : livePrice ? 'live' : 'entry')
+                                                : 'closed';
+                                            const liveProfit = isOpen
+                                                ? (currentPrice - trade.entryPrice) * trade.qty - trade.fees
+                                                : trade.profit;
+                                            const totalProfit = liveProfit + (trade.dividend || 0);
+                                            const partialExits = trade.partialExits || [];
+                                            const partialExitProfit = partialExits.reduce((sum, pe) => sum + pe.profit, 0);
+                                            const originalQty = trade.originalQty || trade.qty;
+                                            return (
+                                            <React.Fragment key={trade.id}>
+                                            <tr style={{ borderBottom: '1px solid #1a1a1a', background: idx % 2 === 0 ? '#0a0a0a' : '#0d0d0d' }}>
+                                                <td style={{ padding: '1rem', fontWeight: '600', fontSize: '0.95rem' }}>
+                                                    {partialExits.length > 0 && (
+                                                        <span onClick={() => setExpandedTrade(expandedTrade === trade.id ? null : trade.id)} style={{ cursor: 'pointer', marginRight: '0.5rem', color: '#00ccff' }}>
+                                                            {expandedTrade === trade.id ? '▼' : '▶'}
+                                                        </span>
+                                                    )}
+                                                    {trade.symbol}
+                                                </td>
+                                                <td style={{ padding: '1rem', color: '#999', fontSize: '0.85rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trade.name}</td>
+                                                {showSplitQtyColumns ? (
+                                                    <>
+                                                        <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>{originalQty}</td>
+                                                        <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem', color: trade.qty < originalQty ? '#ffaa00' : '#e0e0e0' }}>{trade.qty}</td>
+                                                    </>
+                                                ) : (
+                                                    <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>{trade.qty}</td>
+                                                )}
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>${trade.entryPrice.toFixed(2)}</td>
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>
+                                                    {isOpen ? (
+                                                        editingPrice === trade.symbol ? (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', justifyContent: 'flex-end' }}>
+                                                                <input
+                                                                    type="number" step="0.01" autoFocus
+                                                                    defaultValue={manualPrice || livePrice || trade.entryPrice}
+                                                                    onKeyDown={(e) => {
+                                                                        if (e.key === 'Enter') {
+                                                                            const val = parseFloat(e.target.value);
+                                                                            if (!isNaN(val) && val > 0) setManualPrices(p => ({...p, [trade.symbol]: val}));
+                                                                            setEditingPrice(null);
+                                                                        }
+                                                                        if (e.key === 'Escape') setEditingPrice(null);
+                                                                    }}
+                                                                    onBlur={(e) => {
+                                                                        const val = parseFloat(e.target.value);
+                                                                        if (!isNaN(val) && val > 0) setManualPrices(p => ({...p, [trade.symbol]: val}));
+                                                                        setEditingPrice(null);
+                                                                    }}
+                                                                    style={{ width: '80px', padding: '0.25rem 0.5rem', background: '#1a1a1a', border: '1px solid #00ccff', borderRadius: '4px', color: '#e0e0e0', fontSize: '0.85rem' }}
+                                                                />
+                                                            </div>
+                                                        ) : (
+                                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+                                                                <span style={{ color: priceSource === 'live' ? '#00ff88' : priceSource === 'manual' ? '#ffaa00' : '#666' }}>
+                                                                    ${currentPrice.toFixed(2)}
+                                                                </span>
+                                                                <span
+                                                                    onClick={() => setEditingPrice(trade.symbol)}
+                                                                    style={{ fontSize: '0.65rem', color: priceSource === 'live' ? '#00ff88' : priceSource === 'manual' ? '#ffaa00' : '#555', cursor: 'pointer', textDecoration: 'underline' }}
+                                                                >
+                                                                    {priceSource === 'live' ? 'live ✓' : priceSource === 'manual' ? 'manual ✎' : 'click to set ✎'}
+                                                                </span>
+                                                            </div>
+                                                        )
+                                                    ) : (
+                                                        <span>${currentPrice.toFixed(2)}</span>
+                                                    )}
+                                                </td>
+                                                {showChgColumn && (
+                                                    <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem', fontWeight: '600' }}>
+                                                        {(() => {
+                                                            if (!isOpen) return null;
+                                                            const prevClose = prevClosePrices[trade.symbol];
+                                                            if (!prevClose) return <span style={{ color: '#666' }}>-</span>;
+                                                            const dayChg = currentPrice - prevClose;
+                                                            return (
+                                                                <span style={{ color: dayChg >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                                    {dayChg >= 0 ? '+' : ''}${dayChg.toFixed(2)}
+                                                                </span>
+                                                            );
+                                                        })()}
+                                                    </td>
+                                                )}
+                                                {showChgColumn && (
+                                                    <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem', fontWeight: '600' }}>
+                                                        {(() => {
+                                                            if (!isOpen) return null;
+                                                            const prevClose = prevClosePrices[trade.symbol];
+                                                            if (!prevClose) return <span style={{ color: '#666' }}>-</span>;
+                                                            const dayChg = currentPrice - prevClose;
+                                                            const todaysProfit = dayChg * trade.qty;
+                                                            return (
+                                                                <span style={{ color: todaysProfit >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                                    {todaysProfit >= 0 ? '+' : ''}${todaysProfit.toFixed(2)}
+                                                                </span>
+                                                            );
+                                                        })()}
+                                                    </td>
+                                                )}
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem', fontWeight: '600' }}>
+                                                    {(() => {
+                                                        const totalChg = currentPrice - trade.entryPrice;
+                                                        return (
+                                                            <span style={{ color: totalChg >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                                {totalChg >= 0 ? '+' : ''}${totalChg.toFixed(2)}
+                                                            </span>
+                                                        );
+                                                    })()}
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem', fontWeight: '600' }}>
+                                                    {(() => {
+                                                        const changePercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
+                                                        return (
+                                                            <span style={{ color: changePercent >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                                {changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%
+                                                            </span>
+                                                        );
+                                                    })()}
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.95rem', fontWeight: '600', color: '#00ccff' }}>
+                                                    ${(trade.qty * currentPrice).toFixed(2)}
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.95rem', fontWeight: '600', color: liveProfit >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                    {liveProfit >= 0 ? '+' : ''}${liveProfit.toFixed(2)}
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.95rem', fontWeight: '600', color: totalProfit >= 0 ? '#00ff88' : '#ff4444' }}>
+                                                    {totalProfit >= 0 ? '+' : ''}${totalProfit.toFixed(2)}
+                                                    {trade.dividend > 0 && <div style={{ fontSize: '0.7rem', color: '#00ccff', marginTop: '2px' }}>+${trade.dividend.toFixed(2)} div</div>}
+                                                </td>
+                                                <td style={{ padding: '1rem' }}>
+                                                    <span style={{ padding: '0.25rem 0.75rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: '600',
+                                                        background: isOpen ? '#00ccff22' : (liveProfit >= 0 ? '#00ff8822' : '#ff444422'),
+                                                        color: isOpen ? '#00ccff' : (liveProfit >= 0 ? '#00ff88' : '#ff4444') }}>
+                                                        {isOpen ? 'OPEN' : (liveProfit >= 0 ? 'WIN' : 'LOSS')}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'center' }}>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                                                        <button onClick={() => handleEditTrade(trade)} style={{ background: 'transparent', border: '1px solid #333', color: '#00ccff', padding: '0.5rem', borderRadius: '4px', cursor: 'pointer' }} title="Edit"><Edit size={16} /></button>
+                                                        <button onClick={() => handleDeleteTrade(trade.id)} style={{ background: 'transparent', border: '1px solid #333', color: '#ff4444', padding: '0.5rem', borderRadius: '4px', cursor: 'pointer' }} title="Delete"><Trash2 size={16} /></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {expandedTrade === trade.id && partialExits.length > 0 && (
+                                                <tr style={{ background: '#111', borderBottom: '1px solid #1a1a1a' }}>
+                                                    <td colSpan="14" style={{ padding: '1rem' }}>
+                                                        <div style={{ marginLeft: '2rem' }}>
+                                                            <div style={{ fontSize: '0.85rem', color: '#00ccff', marginBottom: '0.5rem', fontWeight: '600' }}>PARTIAL EXITS:</div>
+                                                            {partialExits.map(pe => (
+                                                                <div key={pe.id} style={{ padding: '0.5rem 0', fontSize: '0.85rem', color: '#999', display: 'flex', gap: '2rem' }}>
+                                                                    <span>{pe.exitDate}</span>
+                                                                    <span>{pe.qty} shares @ ${pe.exitPrice.toFixed(2)}</span>
+                                                                    <span style={{ color: pe.profit >= 0 ? '#00ff88' : '#ff4444', fontWeight: '600' }}>
+                                                                        {pe.profit >= 0 ? '+' : ''}${pe.profit.toFixed(2)}
+                                                                    </span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            </React.Fragment>
+                                        )})}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {displayTrades.length === 0 && <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>No trades found</div>}
+                    </div>
+                    {showAddTrade && (
+                        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1000 }}>
+                            <div style={{ background: '#111', borderRadius: '8px', padding: '2rem', maxWidth: '600px', width: '100%', border: '1px solid #1a1a1a', maxHeight: '90vh', overflow: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1.5rem' }}>ADD TRADE</h3>
+                                    <button onClick={() => setShowAddTrade(false)} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}><X size={24} /></button>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Symbol *</label>
+                                        <input type="text" placeholder="AAPL" value={formData.symbol} onChange={(e) => setFormData({...formData, symbol: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', fontSize: '1rem' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Qty *</label>
+                                        <input type="number" placeholder="100" value={formData.qty} onChange={(e) => setFormData({...formData, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Name</label>
+                                    <input type="text" placeholder="Apple Inc" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Price *</label>
+                                        <input type="number" step="0.01" placeholder="150.25" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price</label>
+                                        <input type="number" step="0.01" placeholder="160.50" value={formData.exitPrice} onChange={(e) => setFormData({...formData, exitPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Date *</label>
+                                        <input type="date" value={formData.entryDate} onChange={(e) => setFormData({...formData, entryDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
+                                        <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Profit</label>
+                                        <input type="number" step="0.01" value={formData.profit} onChange={(e) => setFormData({...formData, profit: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
+                                        <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Fees</label>
+                                        <input type="number" step="0.01" value={formData.fees} onChange={(e) => setFormData({...formData, fees: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Notes</label>
+                                    <textarea placeholder="Trade notes..." value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', minHeight: '80px', fontFamily: 'inherit' }} /></div>
+                                    <button onClick={handleAddTrade} disabled={!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate} style={{ background: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? '#333' : '#00ff88', color: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? '#666' : '#000', border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? 'not-allowed' : 'pointer', fontWeight: '600', marginTop: '1rem' }}>ADD TRADE</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {showEditTrade && (
+                        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1000 }}>
+                            <div style={{ background: '#111', borderRadius: '8px', padding: '2rem', maxWidth: '600px', width: '100%', border: '1px solid #1a1a1a', maxHeight: '90vh', overflow: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1.5rem' }}>EDIT TRADE</h3>
+                                    <button onClick={() => { setShowEditTrade(false); setEditingTrade(null); }} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}><X size={24} /></button>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Symbol *</label>
+                                        <input type="text" placeholder="AAPL" value={formData.symbol} onChange={(e) => setFormData({...formData, symbol: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', fontSize: '1rem' }} /></div>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>
+                                                Remaining Qty *
+                                            </label>
+                                            <div>
+                                                <input 
+                                                    type="number" 
+                                                    placeholder="100" 
+                                                    value={editingTrade?.qty || formData.qty} 
+                                                    readOnly={editingTrade && (editingTrade.partialExits || []).length > 0}
+                                                    onChange={(e) => !editingTrade && setFormData({...formData, qty: e.target.value})} 
+                                                    style={{ width: '100%', padding: '0.75rem', background: editingTrade && (editingTrade.partialExits || []).length > 0 ? '#1a1a1a' : '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', cursor: editingTrade && (editingTrade.partialExits || []).length > 0 ? 'not-allowed' : 'text' }} 
+                                                />
+                                                {editingTrade && (editingTrade.partialExits || []).length > 0 && (
+                                                    <div style={{ fontSize: '0.7rem', color: '#ffaa00', marginTop: '4px' }}>
+                                                        Original: {editingTrade.originalQty}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Name</label>
+                                    <input type="text" placeholder="Apple Inc" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Price *</label>
+                                        <input type="number" step="0.01" placeholder="150.25" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price</label>
+                                        <input type="number" step="0.01" placeholder="160.50" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Date *</label>
+                                        <input type="date" value={formData.entryDate} onChange={(e) => setFormData({...formData, entryDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
+                                        <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Profit</label>
+                                        <input type="number" step="0.01" value={formData.profit} onChange={(e) => setFormData({...formData, profit: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
+                                        <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Fees</label>
+                                        <input type="number" step="0.01" value={formData.fees} onChange={(e) => setFormData({...formData, fees: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    </div>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Notes</label>
+                                    <textarea placeholder="Trade notes..." value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0', minHeight: '80px', fontFamily: 'inherit' }} /></div>
+                                    
+                                    {editingTrade && (editingTrade.partialExits || []).length > 0 && (
+                                        <div style={{ background: '#0a0a0a', border: '1px solid #ffaa00', borderRadius: '8px', padding: '1rem', marginTop: '1rem' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                                <h4 style={{ margin: 0, fontSize: '0.9rem', color: '#ffaa00', textTransform: 'uppercase', fontWeight: '600' }}>Partial Exits History</h4>
+                                                <div style={{ fontSize: '0.85rem', color: '#999' }}>
+                                                    Return: <span style={{ 
+                                                        color: editingTrade.partialExits.reduce((sum, pe) => sum + pe.profit, 0) >= 0 ? '#00ff88' : '#ff4444', 
+                                                        fontWeight: '600' 
+                                                    }}>
+                                                        {editingTrade.partialExits.reduce((sum, pe) => sum + pe.profit, 0) >= 0 ? '+' : ''}
+                                                        ${editingTrade.partialExits.reduce((sum, pe) => sum + pe.profit, 0).toFixed(2)}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                {editingTrade.partialExits.map((pe, idx) => (
+                                                    <div key={pe.id} style={{ 
+                                                        background: '#111', 
+                                                        border: `1px solid ${pe.profit >= 0 ? '#00ff8844' : '#ff444444'}`,
+                                                        borderRadius: '4px', 
+                                                        padding: '0.75rem',
+                                                        display: 'flex',
+                                                        justifyContent: 'space-between',
+                                                        alignItems: 'center'
+                                                    }}>
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ fontSize: '0.75rem', color: '#666', marginBottom: '0.25rem' }}>
+                                                                Exit #{idx + 1} • {pe.exitDate}
+                                                            </div>
+                                                            <div style={{ fontSize: '0.85rem', color: '#e0e0e0' }}>
+                                                                <strong>{pe.qty}</strong> shares @ <strong>${pe.exitPrice.toFixed(2)}</strong>
+                                                            </div>
+                                                            <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                                                                <span style={{ 
+                                                                    color: pe.profit >= 0 ? '#00ff88' : '#ff4444',
+                                                                    fontWeight: '600'
+                                                                }}>
+                                                                    {pe.profit >= 0 ? '✓ Gain' : '✗ Loss'}: {pe.profit >= 0 ? '+' : ''}${pe.profit.toFixed(2)}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                            <button 
+                                                                onClick={() => handleEditPartialExit(pe)}
+                                                                style={{ 
+                                                                    background: 'transparent', 
+                                                                    border: '1px solid #00ccff', 
+                                                                    color: '#00ccff', 
+                                                                    padding: '0.4rem', 
+                                                                    borderRadius: '4px', 
+                                                                    cursor: 'pointer',
+                                                                    fontSize: '0.75rem'
+                                                                }}
+                                                                title="Edit"
+                                                            >
+                                                                <Edit size={14} />
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => handleDeletePartialExit(pe.id)}
+                                                                style={{ 
+                                                                    background: 'transparent', 
+                                                                    border: '1px solid #ff4444', 
+                                                                    color: '#ff4444', 
+                                                                    padding: '0.4rem', 
+                                                                    borderRadius: '4px', 
+                                                                    cursor: 'pointer',
+                                                                    fontSize: '0.75rem'
+                                                                }}
+                                                                title="Delete"
+                                                            >
+                                                                <Trash2 size={14} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                                        <button onClick={handleUpdateTrade} disabled={!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate} style={{ flex: 1, background: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? '#333' : '#00ccff', color: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? '#666' : '#000', border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? 'not-allowed' : 'pointer', fontWeight: '600' }}>UPDATE TRADE</button>
+                                        <button onClick={() => { setEditingPartialExit(null); setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] }); setShowPartialExit(true); }} style={{ background: '#ffaa00', color: '#000', border: 'none', padding: '1rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}>PARTIAL EXIT</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {showPartialExit && (
+                        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1001 }}>
+                            <div style={{ background: '#111', borderRadius: '8px', padding: '2rem', maxWidth: '500px', width: '100%', border: '1px solid #1a1a1a' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1.5rem' }}>{editingPartialExit ? 'EDIT PARTIAL EXIT' : 'PARTIAL EXIT'}</h3>
+                                    <button onClick={() => { setShowPartialExit(false); setEditingPartialExit(null); setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] }); }} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}><X size={24} /></button>
+                                </div>
+                                <div style={{ marginBottom: '1.5rem', color: '#999', fontSize: '0.9rem' }}>
+                                    Remaining shares: <strong style={{ color: '#00ff88' }}>{editingTrade?.qty || 0}</strong> of {editingTrade?.originalQty || editingTrade?.qty || 0}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Shares to Exit *</label>
+                                    <input type="number" placeholder="10" value={partialExitForm.qty} onChange={(e) => setPartialExitForm({...partialExitForm, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price *</label>
+                                    <input type="number" step="0.01" placeholder="155.50" value={partialExitForm.exitPrice} onChange={(e) => setPartialExitForm({...partialExitForm, exitPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: '#999', fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date *</label>
+                                    <input type="date" value={partialExitForm.exitDate} onChange={(e) => setPartialExitForm({...partialExitForm, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: '#0a0a0a', border: '1px solid #222', borderRadius: '4px', color: '#e0e0e0' }} /></div>
+                                    <button 
+                                        onClick={editingPartialExit ? handleUpdatePartialExit : handleAddPartialExit} 
+                                        disabled={!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate} 
+                                        style={{ background: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? '#333' : '#ffaa00', color: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? '#666' : '#000', border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? 'not-allowed' : 'pointer', fontWeight: '600', marginTop: '1rem' }}
+                                    >
+                                        {editingPartialExit ? 'UPDATE PARTIAL EXIT' : 'ADD PARTIAL EXIT'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {showCSVUpload && (
+                        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1000 }}>
+                            <div style={{ background: '#111', borderRadius: '8px', padding: '2rem', maxWidth: '600px', width: '100%', border: '1px solid #1a1a1a' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1.5rem' }}>UPLOAD CSV</h3>
+                                    <button onClick={() => setShowCSVUpload(false)} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}><X size={24} /></button>
+                                </div>
+                                <div style={{ marginBottom: '1.5rem', color: '#999', fontSize: '0.9rem', lineHeight: '1.6' }}>
+                                    <strong style={{ color: '#00ff88' }}>Expected CSV format:</strong><br/><br/>
+                                    <strong>Required:</strong> Symbol, Qty, Entry Price, Entry Date<br/>
+                                    <strong>Optional:</strong> Name, Exit Date, Total Chg, Fees, Total Profit, Log<br/><br/>
+                                    <em style={{ fontSize: '0.85rem', color: '#666' }}>Note: If no exit price is provided, it will be calculated from Total Chg</em>
+                                </div>
+                                <label style={{ display: 'block', padding: '3rem', border: '2px dashed #333', borderRadius: '8px', textAlign: 'center', cursor: processingCSV ? 'not-allowed' : 'pointer' }}>
+                                    <input type="file" accept=".csv" onChange={handleCSVUpload} disabled={processingCSV} style={{ display: 'none' }} />
+                                    <Upload size={48} style={{ margin: '0 auto 1rem', display: 'block', color: '#00ccff' }} />
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '0.5rem' }}>
+                                        {processingCSV ? 'Processing...' : 'Click to upload CSV'}
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PortfolioTracker />);
+    </script>
+</body>
+</html>
