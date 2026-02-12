@@ -272,14 +272,17 @@
                 const symbolIdx = headers.findIndex(h => h === 'Symbol');
                 const nameIdx = headers.findIndex(h => h === 'Name');
                 const qtyIdx = headers.findIndex(h => h === 'Qty');
+                const originalQtyIdx = headers.findIndex(h => h === 'Original Qty');
                 const entryDateIdx = headers.findIndex(h => h === 'Entry Date');
                 const entryPriceIdx = headers.findIndex(h => h === 'Entry Price');
                 const exitDateIdx = headers.findIndex(h => h === 'Exit Date');
-                const exitPriceIdx = headers.findIndex(h => h === 'Last');
+                const exitPriceIdx = headers.findIndex(h => h === 'Exit Price') !== -1 ? headers.findIndex(h => h === 'Exit Price') : headers.findIndex(h => h === 'Last');
                 const totalChgIdx = headers.findIndex(h => h === 'Total Chg');
                 const feesIdx = headers.findIndex(h => h === 'Fees');
-                const profitIdx = headers.findIndex(h => h === 'Total Profit');
-                const logIdx = headers.findIndex(h => h === 'Log');
+                const profitIdx = headers.findIndex(h => h === 'Profit') !== -1 ? headers.findIndex(h => h === 'Profit') : headers.findIndex(h => h === 'Total Profit');
+                const dividendIdx = headers.findIndex(h => h === 'Dividends');
+                const notesIdx = headers.findIndex(h => h === 'Notes') !== -1 ? headers.findIndex(h => h === 'Notes') : headers.findIndex(h => h === 'Log');
+                const partialExitsIdx = headers.findIndex(h => h === 'Partial Exits');
                 if (symbolIdx === -1 || qtyIdx === -1 || entryPriceIdx === -1 || entryDateIdx === -1) {
                     throw new Error('Missing required columns in CSV');
                 }
@@ -306,26 +309,41 @@
                             }
                         }
                     }
-                    // If we still don't have an exit price, try the Last column (only for closed trades)
-                    if (exitPrice === null && exitDate && exitPriceIdx !== -1 && values[exitPriceIdx]) {
-                        exitPrice = parseFloat(values[exitPriceIdx]);
+                    // If we still don't have an exit price, try Exit Price / Last column
+                    if (exitPrice === null && exitPriceIdx !== -1 && values[exitPriceIdx]) {
+                        const parsed = parseFloat(values[exitPriceIdx]);
+                        if (!isNaN(parsed)) exitPrice = parsed;
                     }
-                    
-                    const notes = logIdx !== -1 ? values[logIdx] : '';
+
+                    const notes = notesIdx !== -1 ? values[notesIdx] : '';
+
+                    // Parse partial exits JSON if present
+                    let partialExits = [];
+                    if (partialExitsIdx !== -1 && values[partialExitsIdx] && values[partialExitsIdx].trim() !== '') {
+                        try {
+                            partialExits = JSON.parse(values[partialExitsIdx]);
+                        } catch(e) { partialExits = []; }
+                    }
+
+                    // Dividend: use Dividends column if present, else extract from notes
+                    const dividend = dividendIdx !== -1 && values[dividendIdx] !== undefined
+                        ? parseFloat(values[dividendIdx]) || 0
+                        : extractDividend(notes);
+
                     parsedTrades.push({
                         id: Date.now() + i,
                         symbol: symbol.trim(),
                         name: nameIdx !== -1 ? values[nameIdx].trim() : '',
                         qty,
-                        originalQty: qty,
+                        originalQty: originalQtyIdx !== -1 ? parseFloat(values[originalQtyIdx]) || qty : qty,
                         entryPrice, entryDate,
                         exitDate: exitDate || null,
                         exitPrice: exitPrice,
                         fees: feesIdx !== -1 ? parseFloat(values[feesIdx]) || 0 : 0,
                         profit: profitIdx !== -1 ? parseFloat(values[profitIdx]) || 0 : 0,
-                        dividend: extractDividend(notes),
+                        dividend,
                         notes: notes.trim(),
-                        partialExits: []
+                        partialExits
                     });
                 }
                 return parsedTrades;
@@ -662,7 +680,7 @@
             }, [trades, chartTimeframe]);
 
             const handleExportCSV = () => {
-                const headers = ['Symbol','Name','Qty','Original Qty','Entry Price','Exit Price','Entry Date','Exit Date','Profit','Dividends','Fees','Notes'];
+                const headers = ['Symbol','Name','Qty','Original Qty','Entry Price','Exit Price','Entry Date','Exit Date','Profit','Dividends','Fees','Notes','Partial Exits'];
                 const rows = trades.map(t => [
                     t.symbol,
                     `"${(t.name || '').replace(/"/g, '""')}"`,
@@ -675,7 +693,8 @@
                     t.profit,
                     t.dividend || 0,
                     t.fees,
-                    `"${(t.notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`
+                    `"${(t.notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+                    t.partialExits && t.partialExits.length > 0 ? `"${JSON.stringify(t.partialExits).replace(/"/g, '""')}"` : ''
                 ]);
                 const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
                 const blob = new Blob([csv], { type: 'text/csv' });
@@ -685,6 +704,44 @@
                 a.download = `portfolio-export-${new Date().toISOString().split('T')[0]}.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
+            };
+
+            const handleExportJSON = () => {
+                const backup = {
+                    version: 1,
+                    exportedAt: new Date().toISOString(),
+                    trades
+                };
+                const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `portfolio-backup-${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const handleImportJSON = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    try {
+                        const backup = JSON.parse(event.target.result);
+                        if (!backup.trades || !Array.isArray(backup.trades)) {
+                            alert('Invalid backup file — no trades found.');
+                            return;
+                        }
+                        if (!window.confirm(`This will replace all ${trades.length} current trades with ${backup.trades.length} trades from the backup (exported ${new Date(backup.exportedAt).toLocaleDateString()}). Continue?`)) return;
+                        await window.storage.set('portfolio_trades', JSON.stringify(backup.trades));
+                        setTrades(backup.trades);
+                        alert(`✅ Successfully restored ${backup.trades.length} trades.`);
+                    } catch (err) {
+                        alert('Failed to read backup file. Make sure it\'s a valid JSON backup.');
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
             };
 
             const handleSort = (column) => {
@@ -838,6 +895,10 @@
                                         <button onClick={() => setShowAddTrade(true)} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
                                             <Plus size={20} /> Add Trade
                                         </button>
+                                        <label style={{ background: '#1a1a1a', color: '#ffaa00', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Upload size={20} /> Restore JSON
+                                            <input type="file" accept=".json" onChange={handleImportJSON} style={{ display: 'none' }} />
+                                        </label>
                                     </div>
                                 </div>
                             ) : (
@@ -1018,6 +1079,13 @@
                                         <button onClick={handleExportCSV} style={{ background: '#1a1a1a', color: '#00ff88', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                             <Upload size={20} style={{ transform: 'rotate(180deg)' }} /> Export CSV
                                         </button>
+                                        <button onClick={handleExportJSON} style={{ background: '#1a1a1a', color: '#ffaa00', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Upload size={20} style={{ transform: 'rotate(180deg)' }} /> Backup JSON
+                                        </button>
+                                        <label style={{ background: '#1a1a1a', color: '#ffaa00', border: '1px solid #333', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Upload size={20} /> Restore JSON
+                                            <input type="file" accept=".json" onChange={handleImportJSON} style={{ display: 'none' }} />
+                                        </label>
                                         <button onClick={handleClearPortfolio} style={{ background: 'transparent', color: '#ff4444', border: '1px solid #ff4444', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>Clear Portfolio</button>
                                     </div>
                                 </>
@@ -1106,6 +1174,13 @@
                             <div style={{ display: 'flex', gap: '1rem' }}>
                                 <button onClick={() => setShowAddTrade(true)} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #333', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Plus size={20} /> Add Trade</button>
                                 <button onClick={() => setShowCSVUpload(true)} style={{ background: '#1a1a1a', color: '#00ccff', border: '1px solid #333', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Upload size={20} /> Upload CSV</button>
+                                <button onClick={handleExportJSON} style={{ background: '#1a1a1a', color: '#ffaa00', border: '1px solid #333', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Upload size={20} style={{ transform: 'rotate(180deg)' }} /> Backup JSON
+                                </button>
+                                <label style={{ background: '#1a1a1a', color: '#ffaa00', border: '1px solid #333', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Upload size={20} /> Restore JSON
+                                    <input type="file" accept=".json" onChange={handleImportJSON} style={{ display: 'none' }} />
+                                </label>
                             </div>
                         </div>
 
