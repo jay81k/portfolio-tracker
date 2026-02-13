@@ -1783,7 +1783,9 @@
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                 <button onClick={() => setView('dashboard')} style={{ background: 'transparent', border: `1px solid ${T.borderStrong}`, color: T.textMuted, padding: '0.5rem', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}><Home size={24} /></button>
-                                <h1 style={{ fontSize: '2rem', fontWeight: '800', margin: 0 }}>ALL TRADES</h1>
+                                <h1 style={{ fontSize: '2rem', fontWeight: '800', margin: 0 }}>
+                                    {tradeView === 'all' ? 'ALL TRADES' : tradeView === 'open' ? 'OPEN TRADES' : 'CLOSED TRADES'}
+                                </h1>
                             </div>
                             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                                 <button onClick={() => setShowAddTrade(true)} style={{ background: T.green, color: T.pageBg, border: 'none', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Plus size={20} /> Add Trade</button>
