@@ -108,6 +108,12 @@
                 qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0]
             });
             const [editingPartialExit, setEditingPartialExit] = useState(null);
+            const [partialType, setPartialType] = useState('exit');
+            const [partialAddForm, setPartialAddForm] = useState({
+                qty: '', price: '', date: new Date().toISOString().split('T')[0]
+            });
+            const [dividendAddVal, setDividendAddVal] = useState('');
+            const [dividendAddActive, setDividendAddActive] = useState(false);
             const [expandedTrade, setExpandedTrade] = useState(null);
             const [sortColumn, setSortColumn] = useState(null);
             const [sortDirection, setSortDirection] = useState('asc'); // 'asc' or 'desc'
@@ -475,6 +481,7 @@
                             ...trade,
                             originalQty: trade.originalQty || trade.qty,
                             partialExits: trade.partialExits || [],
+                            partialAdds: trade.partialAdds || [],
                             direction: trade.direction || 'long'
                         }));
                         setTrades(migratedTrades);
@@ -550,6 +557,7 @@
                 const dividendIdx = headers.findIndex(h => h === 'Dividends');
                 const notesIdx = headers.findIndex(h => h === 'Notes') !== -1 ? headers.findIndex(h => h === 'Notes') : headers.findIndex(h => h === 'Log');
                 const partialExitsIdx = headers.findIndex(h => h === 'Partial Exits');
+                const partialAddsIdx = headers.findIndex(h => h === 'Partial Adds');
                 const directionIdx = headers.findIndex(h => h === 'Direction');
                 if (symbolIdx === -1 || qtyIdx === -1 || entryPriceIdx === -1 || entryDateIdx === -1) {
                     throw new Error('Missing required columns in CSV');
@@ -592,6 +600,13 @@
                             partialExits = JSON.parse(values[partialExitsIdx]);
                         } catch(e) { partialExits = []; }
                     }
+                    // Parse partial adds JSON if present
+                    let partialAdds = [];
+                    if (partialAddsIdx !== -1 && values[partialAddsIdx] && values[partialAddsIdx].trim() !== '') {
+                        try {
+                            partialAdds = JSON.parse(values[partialAddsIdx]);
+                        } catch(e) { partialAdds = []; }
+                    }
 
                     // Dividend: use Dividends column if present, else extract from notes
                     const dividend = dividendIdx !== -1 && values[dividendIdx] !== undefined
@@ -612,6 +627,7 @@
                         dividend,
                         notes: notes.trim(),
                         partialExits,
+                        partialAdds,
                         direction: directionIdx !== -1 && values[directionIdx] ? values[directionIdx].trim() : 'long'
                     });
                 }
@@ -658,7 +674,8 @@
                     dividend: parseFloat(formData.dividend) || 0,
                     notes: formData.notes.trim(),
                     direction: formData.direction || 'long',
-                    partialExits: []
+                    partialExits: [],
+                    partialAdds: []
                 };
                 await saveTrades([...tradesRef.current, newTrade]);
                 setShowAddTrade(false);
@@ -780,6 +797,60 @@
                 const newProfit = currentProfit - partialExit.profit;
                 setFormData({...formData, profit: newProfit.toString()});
 
+                await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
+                setEditingTrade(updatedTrade);
+            };
+
+            const handleAddPartialAdd = async () => {
+                if (!partialAddForm.qty || !partialAddForm.price || !partialAddForm.date) {
+                    alert('Please fill in all fields');
+                    return;
+                }
+                const addQty = parseFloat(partialAddForm.qty);
+                const addPrice = parseFloat(partialAddForm.price);
+                const currentQty = editingTrade.qty;
+                const currentAvgCost = editingTrade.entryPrice;
+                // Weighted average cost
+                const newAvgCost = ((currentQty * currentAvgCost) + (addQty * addPrice)) / (currentQty + addQty);
+                const partialAdd = {
+                    id: Date.now(),
+                    qty: addQty,
+                    price: addPrice,
+                    date: partialAddForm.date
+                };
+                const updatedTrade = {
+                    ...editingTrade,
+                    partialAdds: [...(editingTrade.partialAdds || []), partialAdd],
+                    qty: currentQty + addQty,
+                    originalQty: (editingTrade.originalQty || currentQty) + addQty,
+                    entryPrice: parseFloat(newAvgCost.toFixed(4))
+                };
+                setFormData({...formData, entryPrice: newAvgCost.toFixed(4)});
+                await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
+                setEditingTrade(updatedTrade);
+                setShowPartialExit(false);
+                setPartialAddForm({ qty: '', price: '', date: new Date().toISOString().split('T')[0] });
+            };
+
+            const handleDeletePartialAdd = async (partialAddId) => {
+                if (!confirm('Delete this scale-in entry? Avg cost will be recalculated.')) return;
+                const partialAdd = (editingTrade.partialAdds || []).find(pa => pa.id === partialAddId);
+                if (!partialAdd) return;
+                const currentQty = editingTrade.qty;
+                const currentAvgCost = editingTrade.entryPrice;
+                // Reverse the weighted average
+                const prevQty = currentQty - partialAdd.qty;
+                const prevAvgCost = prevQty > 0
+                    ? ((currentQty * currentAvgCost) - (partialAdd.qty * partialAdd.price)) / prevQty
+                    : currentAvgCost;
+                const updatedTrade = {
+                    ...editingTrade,
+                    partialAdds: (editingTrade.partialAdds || []).filter(pa => pa.id !== partialAddId),
+                    qty: prevQty,
+                    originalQty: (editingTrade.originalQty || currentQty) - partialAdd.qty,
+                    entryPrice: parseFloat(prevAvgCost.toFixed(4))
+                };
+                setFormData({...formData, entryPrice: prevAvgCost.toFixed(4)});
                 await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
                 setEditingTrade(updatedTrade);
             };
@@ -967,7 +1038,7 @@
             }, [trades, chartTimeframe]);
 
             const handleExportCSV = () => {
-                const headers = ['Symbol','Name','Qty','Original Qty','Entry Price','Exit Price','Entry Date','Exit Date','Profit','Dividends','Fees','Notes','Partial Exits','Direction'];
+                const headers = ['Symbol','Name','Qty','Original Qty','Entry Price','Exit Price','Entry Date','Exit Date','Profit','Dividends','Fees','Notes','Partial Exits','Partial Adds','Direction'];
                 const rows = trades.map(t => [
                     t.symbol,
                     `"${(t.name || '').replace(/"/g, '""')}"`,
@@ -982,6 +1053,7 @@
                     t.fees,
                     `"${(t.notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
                     t.partialExits && t.partialExits.length > 0 ? `"${JSON.stringify(t.partialExits).replace(/"/g, '""')}"` : '',
+                    t.partialAdds && t.partialAdds.length > 0 ? `"${JSON.stringify(t.partialAdds).replace(/"/g, '""')}"` : '',
                     t.direction || 'long'
                 ]);
                 const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
@@ -1153,7 +1225,7 @@
             displayTrades = sortTrades(displayTrades);
 
             // Only show split columns (Orig Qty / Remaining) if we're showing open trades AND any have partial exits
-            const showSplitQtyColumns = tradeView !== 'closed' && displayTrades.some(t => !t.exitDate && (t.partialExits || []).length > 0);
+            const showSplitQtyColumns = tradeView !== 'closed' && displayTrades.some(t => !t.exitDate && ((t.partialExits || []).length > 0 || (t.partialAdds || []).length > 0));
             
             // Only show Chg column (intraday change) when viewing open trades
             const showChgColumn = tradeView !== 'closed';
@@ -1666,7 +1738,7 @@
                                     </div>
 
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '120px 100px 100px', gap: '1rem' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Symbol *</label>
                                             <input type="text" placeholder="AAPL" value={formData.symbol}
                                                 onChange={(e) => setFormData({...formData, symbol: e.target.value.toUpperCase()})}
@@ -1705,11 +1777,26 @@
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
                                             <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 72px', gap: '1rem' }}>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Profit</label>
                                             <input type="number" step="0.01" value={formData.profit} onChange={(e) => setFormData({...formData, profit: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
-                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
-                                            <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <div>
+                                            <label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
+                                            <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.35rem' }}>
+                                                {dividendAddActive ? (
+                                                    <>
+                                                        <input autoFocus type="number" step="0.01" placeholder="add amount" value={dividendAddVal} onChange={(e) => setDividendAddVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && dividendAddVal) { setFormData(prev => ({...prev, dividend: String(((parseFloat(prev.dividend) || 0) + parseFloat(dividendAddVal)).toFixed(2))})); setDividendAddVal(''); setDividendAddActive(false); } else if (e.key === 'Escape') { setDividendAddVal(''); setDividendAddActive(false); } }} style={{ flex: 1, padding: '0.28rem 0.45rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '3px', color: T.textPrimary, fontSize: '0.72rem' }} />
+                                                        <button onClick={() => { if (dividendAddVal) { setFormData(prev => ({...prev, dividend: String(((parseFloat(prev.dividend) || 0) + parseFloat(dividendAddVal)).toFixed(2))})); } setDividendAddVal(''); setDividendAddActive(false); }} style={{ padding: '0.28rem 0.5rem', background: 'transparent', border: `1px solid ${T.green}`, borderRadius: '3px', color: T.green, cursor: 'pointer', fontSize: '0.72rem', lineHeight: 1 }}>&#10003;</button>
+                                                        <button onClick={() => { setDividendAddVal(''); setDividendAddActive(false); }} style={{ padding: '0.28rem 0.45rem', background: 'transparent', border: `1px solid ${T.textFaint}`, borderRadius: '3px', color: T.textMuted, cursor: 'pointer', fontSize: '0.72rem', lineHeight: 1 }}>&#10005;</button>
+                                                    </>
+                                                ) : (
+                                                    <button onClick={() => setDividendAddActive(true)} title="Add to dividend total" style={{ padding: '0.18rem 0.45rem', background: 'transparent', border: `1px solid ${T.textFaint}`, borderRadius: '3px', color: T.textMuted, cursor: 'pointer', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem', lineHeight: 1 }}>
+                                                        <span style={{ fontSize: '0.8rem', lineHeight: 1 }}>+</span> add
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Fees</label>
                                             <input type="number" step="0.01" value={formData.fees} onChange={(e) => setFormData({...formData, fees: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
@@ -1976,12 +2063,7 @@
                                             return (
                                             <React.Fragment key={trade.id}>
                                             <tr style={{ borderBottom: `1px solid ${T.border}`, background: idx % 2 === 0 ? T.tableRowEven : T.tableRowOdd }}>
-                                                <td style={{ padding: '1rem', fontWeight: '600', fontSize: '0.95rem' }}>
-                                                    {partialExits.length > 0 && (
-                                                        <span onClick={() => setExpandedTrade(expandedTrade === trade.id ? null : trade.id)} style={{ cursor: 'pointer', marginRight: '0.5rem', color: T.blue }}>
-                                                            {expandedTrade === trade.id ? '▼' : '▶'}
-                                                        </span>
-                                                    )}
+                                                <td onClick={() => (partialExits.length > 0 || (trade.partialAdds || []).length > 0) && setExpandedTrade(expandedTrade === trade.id ? null : trade.id)} style={{ padding: '1rem', fontWeight: '600', fontSize: '0.95rem', cursor: (partialExits.length > 0 || (trade.partialAdds || []).length > 0) ? 'pointer' : 'default' }}>
                                                     {trade.direction === 'short' && (
                                                         <span style={{ display: 'inline-block', background: T.redBg, color: T.red, border: `1px solid ${T.red}`, borderRadius: '3px', fontSize: '0.65rem', fontWeight: '700', padding: '1px 4px', marginRight: '0.4rem', verticalAlign: 'middle', lineHeight: '1.4' }}>S</span>
                                                     )}
@@ -2124,15 +2206,23 @@
                                                 <tr style={{ background: T.surfaceBg, borderBottom: `1px solid ${T.border}` }}>
                                                     <td colSpan="14" style={{ padding: '1rem', background: T.surfaceBg }}>
                                                         <div style={{ marginLeft: '2rem' }}>
-                                                            <div style={{ fontSize: '0.85rem', color: T.blue, marginBottom: '0.5rem', fontWeight: '600' }}>PARTIAL EXITS:</div>
-                                                            {partialExits.map(pe => (
-                                                                <div key={pe.id} style={{ padding: '0.5rem 0', fontSize: '0.85rem', color: T.textSecondary, display: 'flex', gap: '2rem' }}>
-                                                                    <span>{pe.exitDate}</span>
-                                                                    <span>{pe.qty} shares @ ${pe.exitPrice.toFixed(2)}</span>
-                                                                    <span style={{ color: pe.profit >= 0 ? T.green : T.red, fontWeight: '600' }}>
-                                                                        {pe.profit >= 0 ? '+' : ''}${pe.profit.toFixed(2)}
-                                                                    </span>
-                                                                </div>
+                                                            <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.5rem', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trade Activity</div>
+                                                            {[...partialExits.map(pe => ({...pe, type:'exit'})), ...(trade.partialAdds||[]).map(pa => ({...pa, type:'add'}))].sort((a,b) => new Date(a.exitDate||a.date) - new Date(b.exitDate||b.date)).map(item => (
+                                                                item.type === 'exit' ? (
+                                                                    <div key={item.id} style={{ padding: '0.35rem 0', fontSize: '0.82rem', color: T.textSecondary, display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                                                                        <span style={{ fontSize: '0.63rem', fontWeight: '700', color: T.amber, background: `${T.amber}22`, padding: '0.1rem 0.35rem', borderRadius: '2px', textTransform: 'uppercase' }}>Out</span>
+                                                                        <span>{item.exitDate}</span>
+                                                                        <span>{item.qty} @ ${item.exitPrice.toFixed(2)}</span>
+                                                                        <span style={{ color: item.profit >= 0 ? T.green : T.red, fontWeight: '600' }}>{item.profit >= 0 ? '+' : ''}${item.profit.toFixed(2)}</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div key={item.id} style={{ padding: '0.35rem 0', fontSize: '0.82rem', color: T.textSecondary, display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                                                                        <span style={{ fontSize: '0.63rem', fontWeight: '700', color: T.green, background: `${T.green}22`, padding: '0.1rem 0.35rem', borderRadius: '2px', textTransform: 'uppercase' }}>In</span>
+                                                                        <span>{item.date}</span>
+                                                                        <span>+{item.qty} @ ${item.price.toFixed(2)}</span>
+                                                                        <span style={{ color: T.textMuted, fontSize: '0.75rem' }}>avg adjusted</span>
+                                                                    </div>
+                                                                )
                                                             ))}
                                                         </div>
                                                     </td>
@@ -2155,7 +2245,7 @@
                                 </div>
 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 100px 100px', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Symbol *</label>
                                         <input type="text" placeholder="AAPL" value={formData.symbol}
                                             onChange={(e) => setFormData({...formData, symbol: e.target.value.toUpperCase()})}
@@ -2194,11 +2284,26 @@
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
                                             <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 72px', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Profit</label>
                                             <input type="number" step="0.01" value={formData.profit} onChange={(e) => setFormData({...formData, profit: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
-                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
-                                            <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
+                                            <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.35rem' }}>
+                                                {dividendAddActive ? (
+                                                    <>
+                                                        <input autoFocus type="number" step="0.01" placeholder="add amount" value={dividendAddVal} onChange={(e) => setDividendAddVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && dividendAddVal) { setFormData(prev => ({...prev, dividend: String(((parseFloat(prev.dividend) || 0) + parseFloat(dividendAddVal)).toFixed(2))})); setDividendAddVal(''); setDividendAddActive(false); } else if (e.key === 'Escape') { setDividendAddVal(''); setDividendAddActive(false); } }} style={{ flex: 1, padding: '0.28rem 0.45rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '3px', color: T.textPrimary, fontSize: '0.72rem' }} />
+                                                        <button onClick={() => { if (dividendAddVal) { setFormData(prev => ({...prev, dividend: String(((parseFloat(prev.dividend) || 0) + parseFloat(dividendAddVal)).toFixed(2))})); } setDividendAddVal(''); setDividendAddActive(false); }} style={{ padding: '0.28rem 0.5rem', background: 'transparent', border: `1px solid ${T.green}`, borderRadius: '3px', color: T.green, cursor: 'pointer', fontSize: '0.72rem', lineHeight: 1 }}>&#10003;</button>
+                                                        <button onClick={() => { setDividendAddVal(''); setDividendAddActive(false); }} style={{ padding: '0.28rem 0.45rem', background: 'transparent', border: `1px solid ${T.textFaint}`, borderRadius: '3px', color: T.textMuted, cursor: 'pointer', fontSize: '0.72rem', lineHeight: 1 }}>&#10005;</button>
+                                                    </>
+                                                ) : (
+                                                    <button onClick={() => setDividendAddActive(true)} title="Add to dividend total" style={{ padding: '0.18rem 0.45rem', background: 'transparent', border: `1px solid ${T.textFaint}`, borderRadius: '3px', color: T.textMuted, cursor: 'pointer', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem', lineHeight: 1 }}>
+                                                        <span style={{ fontSize: '0.8rem', lineHeight: 1 }}>+</span> add
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Fees</label>
                                             <input type="number" step="0.01" value={formData.fees} onChange={(e) => setFormData({...formData, fees: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
@@ -2218,7 +2323,7 @@
                                     <button onClick={() => { setShowEditTrade(false); setEditingTrade(null); }} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 100px 100px', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Symbol *</label>
                                         <input type="text" placeholder="AAPL" value={formData.symbol}
                                             onChange={(e) => setFormData({...formData, symbol: e.target.value.toUpperCase()})}
@@ -2230,18 +2335,18 @@
                                         </select></div>
                                         <div>
                                             <label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                                                {editingTrade && (editingTrade.partialExits || []).length > 0 ? 'Rem. Qty *' : 'Qty *'}
+                                                {editingTrade && (editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty ? 'Rem. Qty *' : 'Qty *'}
                                             </label>
                                             <div>
                                                 <input 
                                                     type="number" 
                                                     placeholder="100" 
                                                     value={editingTrade?.qty || formData.qty} 
-                                                    readOnly={editingTrade && (editingTrade.partialExits || []).length > 0}
+                                                    readOnly={editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty)}
                                                     onChange={(e) => !editingTrade && setFormData({...formData, qty: e.target.value})} 
-                                                    style={{ width: '100%', maxWidth: '110px', padding: '0.75rem', background: editingTrade && (editingTrade.partialExits || []).length > 0 ? T.raisedBg : T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary, fontSize: '0.95rem', cursor: editingTrade && (editingTrade.partialExits || []).length > 0 ? 'not-allowed' : 'text' }} 
+                                                    style={{ width: '100%', maxWidth: '110px', padding: '0.75rem', background: editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty) ? T.raisedBg : T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary, fontSize: '0.95rem', cursor: editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty) ? 'not-allowed' : 'text' }} 
                                                 />
-                                                {editingTrade && (editingTrade.partialExits || []).length > 0 && (
+                                                {editingTrade && (editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty && (
                                                     <div style={{ fontSize: '0.7rem', color: T.amber, marginTop: '4px' }}>
                                                         Original: {editingTrade.originalQty}
                                                     </div>
@@ -2266,99 +2371,95 @@
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
                                         <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 72px', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Profit</label>
                                         <input type="number" step="0.01" value={formData.profit} onChange={(e) => setFormData({...formData, profit: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
-                                        <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
-                                        <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Dividends</label>
+                                            <input type="number" step="0.01" value={formData.dividend} onChange={(e) => setFormData({...formData, dividend: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.35rem' }}>
+                                                {dividendAddActive ? (
+                                                    <>
+                                                        <input autoFocus type="number" step="0.01" placeholder="add amount" value={dividendAddVal} onChange={(e) => setDividendAddVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && dividendAddVal) { setFormData(prev => ({...prev, dividend: String(((parseFloat(prev.dividend) || 0) + parseFloat(dividendAddVal)).toFixed(2))})); setDividendAddVal(''); setDividendAddActive(false); } else if (e.key === 'Escape') { setDividendAddVal(''); setDividendAddActive(false); } }} style={{ flex: 1, padding: '0.28rem 0.45rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '3px', color: T.textPrimary, fontSize: '0.72rem' }} />
+                                                        <button onClick={() => { if (dividendAddVal) { setFormData(prev => ({...prev, dividend: String(((parseFloat(prev.dividend) || 0) + parseFloat(dividendAddVal)).toFixed(2))})); } setDividendAddVal(''); setDividendAddActive(false); }} style={{ padding: '0.28rem 0.5rem', background: 'transparent', border: `1px solid ${T.green}`, borderRadius: '3px', color: T.green, cursor: 'pointer', fontSize: '0.72rem', lineHeight: 1 }}>&#10003;</button>
+                                                        <button onClick={() => { setDividendAddVal(''); setDividendAddActive(false); }} style={{ padding: '0.28rem 0.45rem', background: 'transparent', border: `1px solid ${T.textFaint}`, borderRadius: '3px', color: T.textMuted, cursor: 'pointer', fontSize: '0.72rem', lineHeight: 1 }}>&#10005;</button>
+                                                    </>
+                                                ) : (
+                                                    <button onClick={() => setDividendAddActive(true)} title="Add to dividend total" style={{ padding: '0.18rem 0.45rem', background: 'transparent', border: `1px solid ${T.textFaint}`, borderRadius: '3px', color: T.textMuted, cursor: 'pointer', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem', lineHeight: 1 }}>
+                                                        <span style={{ fontSize: '0.8rem', lineHeight: 1 }}>+</span> add
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Fees</label>
                                         <input type="number" step="0.01" value={formData.fees} onChange={(e) => setFormData({...formData, fees: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                     </div>
                                     <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Notes</label>
                                     <textarea placeholder="Trade notes..." value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary, minHeight: '80px', fontFamily: 'inherit' }} /></div>
                                     
-                                    {editingTrade && (editingTrade.partialExits || []).length > 0 && (
-                                        <div style={{ background: T.panelBg, border: '1px solid #ffaa00', borderRadius: '8px', padding: '1rem', marginTop: '1rem' }}>
+                                    {editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty) && (() => {
+                                        const allActivity = [
+                                            ...(editingTrade.partialExits || []).map(pe => ({ ...pe, type: 'exit' })),
+                                            ...(editingTrade.partialAdds || []).map(pa => ({ ...pa, type: 'add' }))
+                                        ].sort((a, b) => new Date(a.exitDate || a.date) - new Date(b.exitDate || b.date));
+                                        const exitReturn = (editingTrade.partialExits || []).reduce((sum, pe) => sum + pe.profit, 0);
+                                        return (
+                                        <div style={{ background: T.panelBg, border: `1px solid ${T.borderStrong}`, borderRadius: '8px', padding: '1rem', marginTop: '1rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                                                <h4 style={{ margin: 0, fontSize: '0.9rem', color: T.amber, textTransform: 'uppercase', fontWeight: '600' }}>Partial Exits History</h4>
-                                                <div style={{ fontSize: '0.85rem', color: T.textSecondary }}>
-                                                    Return: <span style={{ 
-                                                        color: editingTrade.partialExits.reduce((sum, pe) => sum + pe.profit, 0) >= 0 ? T.green : T.red, 
-                                                        fontWeight: '600' 
-                                                    }}>
-                                                        {editingTrade.partialExits.reduce((sum, pe) => sum + pe.profit, 0) >= 0 ? '+' : ''}
-                                                        ${editingTrade.partialExits.reduce((sum, pe) => sum + pe.profit, 0).toFixed(2)}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                                {editingTrade.partialExits.map((pe, idx) => (
-                                                    <div key={pe.id} style={{ 
-                                                        background: T.surfaceBg, 
-                                                        border: `1px solid ${pe.profit >= 0 ? '#00ff8844' : '#ff444444'}`,
-                                                        borderRadius: '4px', 
-                                                        padding: '0.75rem',
-                                                        display: 'flex',
-                                                        justifyContent: 'space-between',
-                                                        alignItems: 'center'
-                                                    }}>
-                                                        <div style={{ flex: 1 }}>
-                                                            <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem' }}>
-                                                                Exit #{idx + 1} • {pe.exitDate}
-                                                            </div>
-                                                            <div style={{ fontSize: '0.85rem', color: T.textPrimary }}>
-                                                                <strong>{pe.qty}</strong> shares @ <strong>${pe.exitPrice.toFixed(2)}</strong>
-                                                            </div>
-                                                            <div style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-                                                                <span style={{ 
-                                                                    color: pe.profit >= 0 ? T.green : T.red,
-                                                                    fontWeight: '600'
-                                                                }}>
-                                                                    {pe.profit >= 0 ? '✓ Gain' : '✗ Loss'}: {pe.profit >= 0 ? '+' : ''}${pe.profit.toFixed(2)}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                            <button 
-                                                                onClick={() => handleEditPartialExit(pe)}
-                                                                style={{ 
-                                                                    background: 'transparent', 
-                                                                    border: `1px solid ${T.blue}`, 
-                                                                    color: T.blue, 
-                                                                    padding: '0.4rem', 
-                                                                    borderRadius: '4px', 
-                                                                    cursor: 'pointer',
-                                                                    fontSize: '0.75rem'
-                                                                }}
-                                                                title="Edit"
-                                                            >
-                                                                <Edit size={14} />
-                                                            </button>
-                                                            <button 
-                                                                onClick={() => handleDeletePartialExit(pe.id)}
-                                                                style={{ 
-                                                                    background: 'transparent', 
-                                                                    border: `1px solid ${T.red}`, 
-                                                                    color: T.red, 
-                                                                    padding: '0.4rem', 
-                                                                    borderRadius: '4px', 
-                                                                    cursor: 'pointer',
-                                                                    fontSize: '0.75rem'
-                                                                }}
-                                                                title="Delete"
-                                                            >
-                                                                <Trash2 size={14} />
-                                                            </button>
-                                                        </div>
+                                                <h4 style={{ margin: 0, fontSize: '0.9rem', color: T.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Trade Activity</h4>
+                                                {(editingTrade.partialExits || []).length > 0 && (
+                                                    <div style={{ fontSize: '0.8rem', color: T.textSecondary }}>
+                                                        Realized: <span style={{ color: exitReturn >= 0 ? T.green : T.red, fontWeight: '600' }}>
+                                                            {exitReturn >= 0 ? '+' : ''}${exitReturn.toFixed(2)}
+                                                        </span>
                                                     </div>
+                                                )}
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                                                {allActivity.map((item, idx) => (
+                                                    item.type === 'exit' ? (
+                                                        <div key={item.id} style={{ background: T.surfaceBg, border: `1px solid ${item.profit >= 0 ? '#00ff8822' : '#ff444422'}`, borderRadius: '4px', padding: '0.65rem 0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <div style={{ flex: 1 }}>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                                                                    <span style={{ fontSize: '0.65rem', fontWeight: '700', color: T.amber, textTransform: 'uppercase', letterSpacing: '0.06em', background: `${T.amber}22`, padding: '0.1rem 0.4rem', borderRadius: '2px' }}>Scale Out</span>
+                                                                    <span style={{ fontSize: '0.72rem', color: T.textMuted }}>{item.exitDate}</span>
+                                                                </div>
+                                                                <div style={{ fontSize: '0.83rem', color: T.textPrimary }}>
+                                                                    <strong>{item.qty}</strong> shares @ <strong>${item.exitPrice.toFixed(2)}</strong>
+                                                                    <span style={{ marginLeft: '0.6rem', color: item.profit >= 0 ? T.green : T.red, fontWeight: '600' }}>
+                                                                        {item.profit >= 0 ? '+' : ''}${item.profit.toFixed(2)}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                                                <button onClick={() => handleEditPartialExit(item)} style={{ background: 'transparent', border: `1px solid ${T.blue}`, color: T.blue, padding: '0.35rem', borderRadius: '4px', cursor: 'pointer' }} title="Edit"><Edit size={13} /></button>
+                                                                <button onClick={() => handleDeletePartialExit(item.id)} style={{ background: 'transparent', border: `1px solid ${T.red}`, color: T.red, padding: '0.35rem', borderRadius: '4px', cursor: 'pointer' }} title="Delete"><Trash2 size={13} /></button>
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <div key={item.id} style={{ background: T.surfaceBg, border: `1px solid ${'#00ff8822'}`, borderRadius: '4px', padding: '0.65rem 0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <div style={{ flex: 1 }}>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                                                                    <span style={{ fontSize: '0.65rem', fontWeight: '700', color: T.green, textTransform: 'uppercase', letterSpacing: '0.06em', background: `${T.green}22`, padding: '0.1rem 0.4rem', borderRadius: '2px' }}>Scale In</span>
+                                                                    <span style={{ fontSize: '0.72rem', color: T.textMuted }}>{item.date}</span>
+                                                                </div>
+                                                                <div style={{ fontSize: '0.83rem', color: T.textPrimary }}>
+                                                                    +<strong>{item.qty}</strong> shares @ <strong>${item.price.toFixed(2)}</strong>
+                                                                    <span style={{ marginLeft: '0.6rem', fontSize: '0.75rem', color: T.textMuted }}>avg cost adjusted</span>
+                                                                </div>
+                                                            </div>
+                                                            <button onClick={() => handleDeletePartialAdd(item.id)} style={{ background: 'transparent', border: `1px solid ${T.red}`, color: T.red, padding: '0.35rem', borderRadius: '4px', cursor: 'pointer' }} title="Delete"><Trash2 size={13} /></button>
+                                                        </div>
+                                                    )
                                                 ))}
                                             </div>
                                         </div>
-                                    )}
+                                        );
+                                    })()}
                                     
                                     <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
                                         <button onClick={handleUpdateTrade} disabled={!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate} style={{ flex: 1, background: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? T.borderStrong : T.blue, color: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? T.textMuted : T.pageBg, border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!formData.symbol || !formData.qty || !formData.entryPrice || !formData.entryDate) ? 'not-allowed' : 'pointer', fontWeight: '600' }}>UPDATE TRADE</button>
-                                        <button onClick={() => { setEditingPartialExit(null); setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] }); setShowPartialExit(true); }} style={{ background: T.amber, color: T.pageBg, border: 'none', padding: '1rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}>PARTIAL EXIT</button>
+                                        <button onClick={() => { setEditingPartialExit(null); setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] }); setPartialAddForm({ qty: '', price: '', date: new Date().toISOString().split('T')[0] }); setPartialType('exit'); setShowPartialExit(true); }} style={{ background: T.amber, color: T.pageBg, border: 'none', padding: '1rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}>PARTIAL</button>
                                     </div>
                                 </div>
                             </div>
@@ -2367,29 +2468,73 @@
                     
                     {showPartialExit && (
                         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: T.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 1001 }}>
-                            <div style={{ background: T.surfaceBg, borderRadius: '8px', padding: '2rem', maxWidth: '500px', width: '100%', border: `1px solid ${T.border}` }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
-                                    <h3 style={{ margin: 0, fontSize: '1.5rem' }}>{editingPartialExit ? 'EDIT PARTIAL EXIT' : 'PARTIAL EXIT'}</h3>
-                                    <button onClick={() => { setShowPartialExit(false); setEditingPartialExit(null); setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] }); }} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
+                            <div style={{ background: T.surfaceBg, borderRadius: '8px', padding: '2rem', maxWidth: '460px', width: '100%', border: `1px solid ${T.border}` }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1.5rem' }}>
+                                        {editingPartialExit ? 'EDIT PARTIAL EXIT' : 'PARTIAL'}
+                                    </h3>
+                                    <button onClick={() => { setShowPartialExit(false); setEditingPartialExit(null); setPartialExitForm({ qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0] }); setPartialAddForm({ qty: '', price: '', date: new Date().toISOString().split('T')[0] }); }} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
                                 </div>
-                                <div style={{ marginBottom: '1.5rem', color: T.textSecondary, fontSize: '0.9rem' }}>
-                                    Remaining shares: <strong style={{ color: T.green }}>{editingTrade?.qty || 0}</strong> of {editingTrade?.originalQty || editingTrade?.qty || 0}
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Shares to Exit *</label>
-                                    <input type="number" placeholder="10" value={partialExitForm.qty} onChange={(e) => setPartialExitForm({...partialExitForm, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
-                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price *</label>
-                                    <input type="number" step="0.01" placeholder="155.50" value={partialExitForm.exitPrice} onChange={(e) => setPartialExitForm({...partialExitForm, exitPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
-                                    <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date *</label>
-                                    <input type="date" value={partialExitForm.exitDate} onChange={(e) => setPartialExitForm({...partialExitForm, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
-                                    <button 
-                                        onClick={editingPartialExit ? handleUpdatePartialExit : handleAddPartialExit} 
-                                        disabled={!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate} 
-                                        style={{ background: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? T.borderStrong : T.amber, color: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? T.textMuted : T.pageBg, border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? 'not-allowed' : 'pointer', fontWeight: '600', marginTop: '1rem' }}
-                                    >
-                                        {editingPartialExit ? 'UPDATE PARTIAL EXIT' : 'ADD PARTIAL EXIT'}
-                                    </button>
-                                </div>
+
+                                {!editingPartialExit && (
+                                    <div style={{ display: 'flex', gap: '0', marginBottom: '1.5rem', border: `1px solid ${T.borderStrong}`, borderRadius: '4px', overflow: 'hidden' }}>
+                                        <button onClick={() => setPartialType('exit')} style={{ flex: 1, padding: '0.6rem', background: partialType === 'exit' ? T.amber : 'transparent', color: partialType === 'exit' ? T.pageBg : T.textMuted, border: 'none', cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem', letterSpacing: '0.05em' }}>SCALE OUT</button>
+                                        <button onClick={() => setPartialType('add')} style={{ flex: 1, padding: '0.6rem', background: partialType === 'add' ? T.green : 'transparent', color: partialType === 'add' ? T.pageBg : T.textMuted, border: 'none', borderLeft: `1px solid ${T.borderStrong}`, cursor: 'pointer', fontWeight: '600', fontSize: '0.8rem', letterSpacing: '0.05em' }}>SCALE IN</button>
+                                    </div>
+                                )}
+
+                                {(editingPartialExit || partialType === 'exit') ? (
+                                    <>
+                                        <div style={{ marginBottom: '1.25rem', color: T.textSecondary, fontSize: '0.85rem' }}>
+                                            Remaining: <strong style={{ color: T.green }}>{editingTrade?.qty || 0}</strong> of {editingTrade?.originalQty || editingTrade?.qty || 0} shares
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Shares to Exit *</label>
+                                            <input type="number" placeholder="10" value={partialExitForm.qty} onChange={(e) => setPartialExitForm({...partialExitForm, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price *</label>
+                                            <input type="number" step="0.01" placeholder="155.50" value={partialExitForm.exitPrice} onChange={(e) => setPartialExitForm({...partialExitForm, exitPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date *</label>
+                                            <input type="date" value={partialExitForm.exitDate} onChange={(e) => setPartialExitForm({...partialExitForm, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <button 
+                                                onClick={editingPartialExit ? handleUpdatePartialExit : handleAddPartialExit} 
+                                                disabled={!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate} 
+                                                style={{ background: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? T.borderStrong : T.amber, color: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? T.textMuted : T.pageBg, border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!partialExitForm.qty || !partialExitForm.exitPrice || !partialExitForm.exitDate) ? 'not-allowed' : 'pointer', fontWeight: '600', marginTop: '0.5rem' }}
+                                            >
+                                                {editingPartialExit ? 'UPDATE PARTIAL EXIT' : 'ADD PARTIAL EXIT'}
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div style={{ marginBottom: '1.25rem', color: T.textSecondary, fontSize: '0.85rem' }}>
+                                            Current: <strong style={{ color: T.blue }}>{editingTrade?.qty || 0}</strong> shares @ <strong style={{ color: T.blue }}>${(editingTrade?.entryPrice || 0).toFixed(2)}</strong> avg cost
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Shares to Add *</label>
+                                            <input type="number" placeholder="50" value={partialAddForm.qty} onChange={(e) => setPartialAddForm({...partialAddForm, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <div>
+                                                <label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Price Per Share *</label>
+                                                <input type="number" step="0.01" placeholder="148.00" value={partialAddForm.price} onChange={(e) => setPartialAddForm({...partialAddForm, price: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} />
+                                                {partialAddForm.qty && partialAddForm.price && editingTrade && (
+                                                    <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: T.textMuted }}>
+                                                        New avg cost: <strong style={{ color: T.blue }}>
+                                                            ${(((editingTrade.qty * editingTrade.entryPrice) + (parseFloat(partialAddForm.qty) * parseFloat(partialAddForm.price))) / (editingTrade.qty + parseFloat(partialAddForm.qty))).toFixed(2)}
+                                                        </strong> · New qty: <strong style={{ color: T.blue }}>{editingTrade.qty + parseFloat(partialAddForm.qty)}</strong>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Date *</label>
+                                            <input type="date" value={partialAddForm.date} onChange={(e) => setPartialAddForm({...partialAddForm, date: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <button 
+                                                onClick={handleAddPartialAdd}
+                                                disabled={!partialAddForm.qty || !partialAddForm.price || !partialAddForm.date}
+                                                style={{ background: (!partialAddForm.qty || !partialAddForm.price || !partialAddForm.date) ? T.borderStrong : T.green, color: (!partialAddForm.qty || !partialAddForm.price || !partialAddForm.date) ? T.textMuted : T.pageBg, border: 'none', padding: '1rem', borderRadius: '4px', cursor: (!partialAddForm.qty || !partialAddForm.price || !partialAddForm.date) ? 'not-allowed' : 'pointer', fontWeight: '600', marginTop: '0.5rem' }}
+                                            >
+                                                ADD TO POSITION
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
                     )}
