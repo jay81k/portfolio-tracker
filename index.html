@@ -718,7 +718,7 @@
                 // Update formData profit to reflect the new partial exit
                 const currentProfit = parseFloat(formData.profit) || 0;
                 const newProfit = currentProfit + partialExit.profit;
-                setFormData({...formData, profit: newProfit.toString()});
+                setFormData({...formData, profit: newProfit.toString(), qty: updatedTrade.qty.toString()});
 
                 await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
                 setEditingTrade(updatedTrade);
@@ -773,7 +773,7 @@
                 // Update formData profit to reflect the change
                 const currentProfit = parseFloat(formData.profit) || 0;
                 const newProfit = currentProfit + profitDifference;
-                setFormData({...formData, profit: newProfit.toString()});
+                setFormData({...formData, profit: newProfit.toString(), qty: updatedTrade.qty.toString()});
 
                 await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
                 setEditingTrade(updatedTrade);
@@ -795,7 +795,7 @@
                 // Update formData profit by subtracting the deleted partial exit's profit
                 const currentProfit = parseFloat(formData.profit) || 0;
                 const newProfit = currentProfit - partialExit.profit;
-                setFormData({...formData, profit: newProfit.toString()});
+                setFormData({...formData, profit: newProfit.toString(), qty: updatedTrade.qty.toString()});
 
                 await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
                 setEditingTrade(updatedTrade);
@@ -825,7 +825,7 @@
                     originalQty: (editingTrade.originalQty || currentQty) + addQty,
                     entryPrice: parseFloat(newAvgCost.toFixed(4))
                 };
-                setFormData({...formData, entryPrice: newAvgCost.toFixed(4)});
+                setFormData({...formData, entryPrice: newAvgCost.toFixed(4), qty: updatedTrade.qty.toString()});
                 await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
                 setEditingTrade(updatedTrade);
                 setShowPartialExit(false);
@@ -850,7 +850,7 @@
                     originalQty: (editingTrade.originalQty || currentQty) - partialAdd.qty,
                     entryPrice: parseFloat(prevAvgCost.toFixed(4))
                 };
-                setFormData({...formData, entryPrice: prevAvgCost.toFixed(4)});
+                setFormData({...formData, entryPrice: prevAvgCost.toFixed(4), qty: updatedTrade.qty.toString()});
                 await saveTrades(tradesRef.current.map(t => t.id === editingTrade.id ? updatedTrade : t));
                 setEditingTrade(updatedTrade);
             };
@@ -883,8 +883,7 @@
                     ...editingTrade,
                     symbol: formData.symbol.toUpperCase().trim(),
                     name: formData.name.trim(),
-                    // Don't update qty here - it's managed by partial exits
-                    // qty: parseFloat(formData.qty),
+                    qty: parseFloat(formData.qty),
                     entryPrice: parseFloat(formData.entryPrice),
                     entryDate: formData.entryDate,
                     exitDate: formData.exitDate || null,
@@ -2078,7 +2077,7 @@
                                                 ) : (
                                                     <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>{trade.qty}</td>
                                                 )}
-                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>${trade.entryPrice.toFixed(2)}</td>
+                                                <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>${trade.entryPrice % 1 === 0 ? trade.entryPrice.toFixed(2) : parseFloat(trade.entryPrice.toFixed(4)).toString()}</td>
                                                 <td style={{ padding: '1rem', textAlign: 'right', fontSize: '0.9rem' }}>
                                                     {isOpen ? (
                                                         editingPrice === trade.symbol ? (
@@ -2341,10 +2340,9 @@
                                                 <input 
                                                     type="number" 
                                                     placeholder="100" 
-                                                    value={editingTrade?.qty || formData.qty} 
-                                                    readOnly={editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty)}
-                                                    onChange={(e) => !editingTrade && setFormData({...formData, qty: e.target.value})} 
-                                                    style={{ width: '100%', maxWidth: '110px', padding: '0.75rem', background: editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty) ? T.raisedBg : T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary, fontSize: '0.95rem', cursor: editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty) ? 'not-allowed' : 'text' }} 
+                                                    value={formData.qty} 
+                                                    onChange={(e) => setFormData({...formData, qty: e.target.value})} 
+                                                    style={{ width: '100%', maxWidth: '110px', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary, fontSize: '0.95rem' }} 
                                                 />
                                                 {editingTrade && (editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty && (
                                                     <div style={{ fontSize: '0.7rem', color: T.amber, marginTop: '4px' }}>
@@ -2397,7 +2395,7 @@
                                     <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Notes</label>
                                     <textarea placeholder="Trade notes..." value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary, minHeight: '80px', fontFamily: 'inherit' }} /></div>
                                     
-                                    {editingTrade && ((editingTrade.partialExits || []).length > 0 && editingTrade.qty < editingTrade.originalQty) && (() => {
+                                    {editingTrade && ((editingTrade.partialExits || []).length > 0 || (editingTrade.partialAdds || []).length > 0) && (() => {
                                         const allActivity = [
                                             ...(editingTrade.partialExits || []).map(pe => ({ ...pe, type: 'exit' })),
                                             ...(editingTrade.partialAdds || []).map(pa => ({ ...pa, type: 'add' }))
@@ -2507,7 +2505,7 @@
                                 ) : (
                                     <>
                                         <div style={{ marginBottom: '1.25rem', color: T.textSecondary, fontSize: '0.85rem' }}>
-                                            Current: <strong style={{ color: T.blue }}>{editingTrade?.qty || 0}</strong> shares @ <strong style={{ color: T.blue }}>${(editingTrade?.entryPrice || 0).toFixed(2)}</strong> avg cost
+                                            Current: <strong style={{ color: T.blue }}>{editingTrade?.qty || 0}</strong> shares @ <strong style={{ color: T.blue }}>${parseFloat((editingTrade?.entryPrice || 0).toFixed(4))}</strong> avg cost
                                         </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Shares to Add *</label>
@@ -2518,7 +2516,7 @@
                                                 {partialAddForm.qty && partialAddForm.price && editingTrade && (
                                                     <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: T.textMuted }}>
                                                         New avg cost: <strong style={{ color: T.blue }}>
-                                                            ${(((editingTrade.qty * editingTrade.entryPrice) + (parseFloat(partialAddForm.qty) * parseFloat(partialAddForm.price))) / (editingTrade.qty + parseFloat(partialAddForm.qty))).toFixed(2)}
+                                                            ${parseFloat((((editingTrade.qty * editingTrade.entryPrice) + (parseFloat(partialAddForm.qty) * parseFloat(partialAddForm.price))) / (editingTrade.qty + parseFloat(partialAddForm.qty))).toFixed(4))}
                                                         </strong> · New qty: <strong style={{ color: T.blue }}>{editingTrade.qty + parseFloat(partialAddForm.qty)}</strong>
                                                     </div>
                                                 )}
