@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Portfolio Tracker</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -104,6 +105,7 @@
                 exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: '', direction: 'long'
             });
             const [showPartialExit, setShowPartialExit] = useState(false);
+            const [tradeActivityExpanded, setTradeActivityExpanded] = useState(false);
             const [partialExitForm, setPartialExitForm] = useState({
                 qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0]
             });
@@ -857,6 +859,7 @@
 
             const handleEditTrade = (trade) => {
                 setEditingTrade(trade);
+                setTradeActivityExpanded(false); // Always start collapsed
                 setFormData({
                     symbol: trade.symbol,
                     name: trade.name,
@@ -1038,7 +1041,9 @@
                 const points = [{ date: cutoff.toISOString().split('T')[0], profit: 0 }];
                 
                 windowTrades.forEach(trade => {
-                    cumulative += (trade.profit || 0);
+                    // Calculate total profit including dividends (matching Total Profit column)
+                    const totalProfit = (trade.profit || 0) + (trade.dividend || 0);
+                    cumulative += totalProfit;
                     points.push({ date: trade.exitDate, profit: parseFloat(cumulative.toFixed(2)) });
                 });
                 
@@ -1397,21 +1402,148 @@
                                                 {fetchingPrices ? 'Fetching live prices...' : 'Click ↻ to refresh'}
                                             </div>
                                         </div>
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Trades</div>
-                                            <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.totalTrades}</div>
-                                            <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.25rem' }}>{metrics.openPositions} open</div>
-                                        </div>
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Win Rate</div>
-                                            <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.winRate.toFixed(1)}%</div>
-                                            <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.25rem' }}>
-                                                <span style={{ color: T.green }}>{metrics.wins}W</span>
-                                                {' / '}
-                                                <span style={{ color: T.red }}>{metrics.losses}L</span>
-                                                {metrics.evens > 0 && <><span style={{ color: T.textMuted }}> / {metrics.evens}x</span></>}
-                                            </div>
-                                        </div>
+                                        {(() => {
+                                            const dmMono = "'DM Mono', monospace";
+
+                                            // Avg hold time — closed trades with both entry and exit date
+                                            const closedWithDates = filteredTrades.filter(t => t.exitDate && t.entryDate);
+                                            const avgHoldDays = closedWithDates.length > 0
+                                                ? Math.round(closedWithDates.reduce((sum, t) => {
+                                                    const diff = (new Date(t.exitDate) - new Date(t.entryDate)) / (1000 * 60 * 60 * 24);
+                                                    return sum + Math.max(0, diff);
+                                                }, 0) / closedWithDates.length)
+                                                : null;
+
+                                            // Trades this month — entry or exit in current calendar month
+                                            const now = new Date();
+                                            const thisMonthTrades = filteredTrades.filter(t => {
+                                                const entry = t.entryDate ? new Date(t.entryDate) : null;
+                                                const exit  = t.exitDate  ? new Date(t.exitDate)  : null;
+                                                return (entry && entry.getMonth() === now.getMonth() && entry.getFullYear() === now.getFullYear())
+                                                    || (exit  && exit.getMonth()  === now.getMonth() && exit.getFullYear()  === now.getFullYear());
+                                            }).length;
+
+                                            const accentRow = (label, value, unit, color) => (
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${T.borderStrong}` }}>
+                                                    <div>
+                                                        <div style={{ fontFamily: dmMono, fontSize: '9px', color: T.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '3px' }}>{label}</div>
+                                                        <div style={{ fontFamily: dmMono, fontSize: '1.15rem', fontWeight: '500', color, lineHeight: 1 }}>
+                                                            {value}{unit && <span style={{ fontSize: '10px', color: T.textMuted, marginLeft: '4px' }}>{unit}</span>}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ width: '3px', height: '32px', borderRadius: '3px', background: color, flexShrink: 0 }}/>
+                                                </div>
+                                            );
+
+                                            return (
+                                                <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
+                                                    <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Trades</div>
+                                                    <div style={{ fontFamily: dmMono, fontSize: '1.8rem', fontWeight: '500', color: T.textPrimary, lineHeight: 1, marginBottom: '14px' }}>{metrics.totalTrades}</div>
+
+                                                    {accentRow('Open Positions', metrics.openPositions, null, T.green)}
+                                                    {accentRow('Avg Hold Time', avgHoldDays !== null ? avgHoldDays : '—', avgHoldDays !== null ? 'days' : null, T.blue)}
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0 0 0' }}>
+                                                        <div>
+                                                            <div style={{ fontFamily: dmMono, fontSize: '9px', color: T.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '3px' }}>This Month</div>
+                                                            <div style={{ fontFamily: dmMono, fontSize: '1.15rem', fontWeight: '500', color: T.amber, lineHeight: 1 }}>
+                                                                {thisMonthTrades}<span style={{ fontSize: '10px', color: T.textMuted, marginLeft: '4px' }}>trades</span>
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ width: '3px', height: '32px', borderRadius: '3px', background: T.amber, flexShrink: 0 }}/>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+                                        {(() => {
+                                            // Delta: compare last 20 closed trades win rate vs overall
+                                            const closedSorted = filteredTrades
+                                                .filter(t => t.exitDate)
+                                                .sort((a, b) => new Date(a.exitDate) - new Date(b.exitDate));
+                                            const last20 = closedSorted.slice(-20);
+                                            const last20Wins = last20.filter(t => t.profit > 5).length;
+                                            const last20Losses = last20.filter(t => t.profit < -5).length;
+                                            const last20WinRate = last20Wins + last20Losses > 0 ? (last20Wins / (last20Wins + last20Losses)) * 100 : 0;
+                                            const delta = closedSorted.length >= 2 ? last20WinRate - metrics.winRate : null;
+
+                                            const wr = metrics.winRate;
+                                            // r=36, strokeWidth=14 → clean ring with no clipping
+                                            const circumference = 226.2; // 2 * PI * 36
+                                            const arcOffset = circumference - circumference * (wr / 100);
+                                            const donutColor = wr >= 50 ? T.green : T.red;
+                                            const grayColor = isDark ? '#4a5260' : '#9ca3af';
+                                            const deltaIsUp = delta !== null && delta >= 0;
+
+                                            return (
+                                                <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
+                                                    <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.75rem', textTransform: 'uppercase', fontWeight: '600' }}>Win Rate</div>
+
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '36px' }}>
+                                                        <svg width="90" height="90" viewBox="0 0 90 90" style={{ flexShrink: 0, overflow: 'visible' }}>
+                                                            <circle cx="45" cy="45" r="36" fill="none" stroke={T.raisedBg} strokeWidth="14"/>
+                                                            <circle
+                                                                cx="45" cy="45" r="36"
+                                                                fill="none"
+                                                                stroke={donutColor}
+                                                                strokeWidth="14"
+                                                                strokeLinecap="butt"
+                                                                strokeDasharray={circumference}
+                                                                strokeDashoffset={arcOffset}
+                                                                transform="rotate(-90 45 45)"
+                                                                style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1), stroke 0.3s ease' }}
+                                                            />
+                                                            <text x="45" y="48" textAnchor="middle" dominantBaseline="middle" style={{ fontFamily: 'DM Mono', fontSize: '18px', fontWeight: '500', fill: T.textPrimary }}>{wr.toFixed(1)}%</text>
+                                                        </svg>
+
+                                                        {/* Side stats */}
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: T.green, flexShrink: 0 }}/>
+                                                                <div>
+                                                                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: '500', color: T.green, lineHeight: 1 }}>{metrics.wins}</div>
+                                                                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '10px', color: T.textMuted, marginTop: '3px' }}>Wins</div>
+                                                                </div>
+                                                            </div>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: T.red, flexShrink: 0 }}/>
+                                                                <div>
+                                                                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: '500', color: T.red, lineHeight: 1 }}>{metrics.losses}</div>
+                                                                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '10px', color: T.textMuted, marginTop: '3px' }}>Losses</div>
+                                                                </div>
+                                                            </div>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: grayColor, flexShrink: 0 }}/>
+                                                                <div>
+                                                                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '22px', fontWeight: '500', color: grayColor, lineHeight: 1 }}>{metrics.evens}</div>
+                                                                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '10px', color: T.textMuted, marginTop: '3px' }}>B/E</div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Divider */}
+                                                    <div style={{ height: '1px', background: T.borderStrong, margin: '12px 0' }}/>
+
+                                                    {/* Delta badge */}
+                                                    {delta !== null ? (
+                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                            <div style={{
+                                                                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                                                borderRadius: '20px', padding: '4px 10px',
+                                                                fontFamily: "'DM Mono', monospace", fontSize: '12px', fontWeight: '500',
+                                                                background: deltaIsUp ? T.greenBgDim : T.redBg,
+                                                                border: `1px solid ${deltaIsUp ? (isDark ? 'rgba(0,255,136,0.25)' : 'rgba(5,150,105,0.25)') : (isDark ? 'rgba(255,68,68,0.25)' : 'rgba(220,38,38,0.25)')}`,
+                                                                color: deltaIsUp ? T.green : T.red
+                                                            }}>
+                                                                {deltaIsUp ? '↑' : '↓'} {deltaIsUp ? '+' : ''}{delta.toFixed(1)}%
+                                                            </div>
+                                                            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '9px', color: T.textMuted }}>vs last 20</div>
+                                                        </div>
+                                                    ) : (
+                                                        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: '9px', color: T.textMuted }}>Need more trades for delta</div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
                                         <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                                             <div>
                                                 <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Win</div>
@@ -1453,7 +1585,7 @@
                                                     data: {
                                                         labels: chartData.map(d => d.date),
                                                         datasets: [{
-                                                            label: 'Cumulative Profit',
+                                                            label: 'Cumulative Total Profit',
                                                             data: chartData.map(d => d.profit),
                                                             borderColor: T.green,
                                                             backgroundColor: T.greenBg,
@@ -1508,7 +1640,7 @@
                                             return (
                                                 <div style={{ background: T.panelBg, borderRadius: '8px', padding: '2rem', border: `1px solid ${T.border}`, marginBottom: '2rem' }}>
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-                                                        <h3 style={{ fontSize: '1.2rem', fontWeight: '700', margin: 0 }}>Cumulative Profit Over Time</h3>
+                                                        <h3 style={{ fontSize: '1.2rem', fontWeight: '700', margin: 0 }}>Cumulative Total Profit Over Time</h3>
                                                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                                                             {['5D','1M','3M','6M','YTD','1Y','3Y','ALL'].map(tf => (
                                                                 <button key={tf} onClick={() => setChartTimeframe(tf)} style={{
@@ -1792,13 +1924,13 @@
                                         </div></div>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Price *</label>
-                                            <input type="number" step="0.01" placeholder="150.25" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <input type="number" step="0.01" placeholder="0.00" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Date *</label>
                                             <input type="date" value={formData.entryDate} onChange={(e) => setFormData({...formData, entryDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price</label>
-                                            <input type="number" step="0.01" placeholder="160.50" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <input type="number" step="0.01" placeholder="0.00" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
                                             <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
@@ -2385,13 +2517,13 @@
                                     </div></div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Price *</label>
-                                        <input type="number" step="0.01" placeholder="150.25" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                        <input type="number" step="0.01" placeholder="0.00" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Date *</label>
                                         <input type="date" value={formData.entryDate} onChange={(e) => setFormData({...formData, entryDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price</label>
-                                        <input type="number" step="0.01" placeholder="160.50" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                        <input type="number" step="0.01" placeholder="0.00" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
                                         <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                     </div>
@@ -2429,8 +2561,14 @@
                                         const exitReturn = (editingTrade.partialExits || []).reduce((sum, pe) => sum + pe.profit, 0);
                                         return (
                                         <div style={{ background: T.panelBg, border: `1px solid ${T.borderStrong}`, borderRadius: '8px', padding: '1rem', marginTop: '1rem' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                                                <h4 style={{ margin: 0, fontSize: '0.9rem', color: T.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Trade Activity</h4>
+                                            <div 
+                                                onClick={() => setTradeActivityExpanded(!tradeActivityExpanded)}
+                                                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tradeActivityExpanded ? '1rem' : '0', cursor: 'pointer', userSelect: 'none' }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                    <h4 style={{ margin: 0, fontSize: '0.9rem', color: T.textSecondary, textTransform: 'uppercase', fontWeight: '600' }}>Trade Activity</h4>
+                                                    <span style={{ fontSize: '0.9rem', color: T.textMuted, transform: tradeActivityExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                                                </div>
                                                 {(editingTrade.partialExits || []).length > 0 && (
                                                     <div style={{ fontSize: '0.8rem', color: T.textSecondary }}>
                                                         Realized: <span style={{ color: exitReturn >= 0 ? T.green : T.red, fontWeight: '600' }}>
@@ -2439,6 +2577,7 @@
                                                     </div>
                                                 )}
                                             </div>
+                                            {tradeActivityExpanded && (
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                                                 {allActivity.map((item, idx) => (
                                                     item.type === 'exit' ? (
@@ -2477,6 +2616,7 @@
                                                     )
                                                 ))}
                                             </div>
+                                            )}
                                         </div>
                                         );
                                     })()}
@@ -2516,7 +2656,7 @@
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Shares to Exit *</label>
                                             <input type="number" placeholder="10" value={partialExitForm.qty} onChange={(e) => setPartialExitForm({...partialExitForm, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price *</label>
-                                            <input type="number" step="0.01" placeholder="155.50" value={partialExitForm.exitPrice} onChange={(e) => setPartialExitForm({...partialExitForm, exitPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <input type="number" step="0.01" placeholder="0.00" value={partialExitForm.exitPrice} onChange={(e) => setPartialExitForm({...partialExitForm, exitPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                             <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date *</label>
                                             <input type="date" value={partialExitForm.exitDate} onChange={(e) => setPartialExitForm({...partialExitForm, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                             <button 
@@ -2538,7 +2678,7 @@
                                             <input type="number" placeholder="50" value={partialAddForm.qty} onChange={(e) => setPartialAddForm({...partialAddForm, qty: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                             <div>
                                                 <label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Price Per Share *</label>
-                                                <input type="number" step="0.01" placeholder="148.00" value={partialAddForm.price} onChange={(e) => setPartialAddForm({...partialAddForm, price: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} />
+                                                <input type="number" step="0.01" placeholder="0.00" value={partialAddForm.price} onChange={(e) => setPartialAddForm({...partialAddForm, price: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} />
                                                 {partialAddForm.qty && partialAddForm.price && editingTrade && (
                                                     <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: T.textMuted }}>
                                                         New avg cost: <strong style={{ color: T.blue }}>
