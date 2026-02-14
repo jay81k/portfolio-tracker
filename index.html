@@ -252,24 +252,29 @@
                 // 1. Check local cache first (instant)
                 if (KNOWN_SYMBOLS[cleanSymbol]) return KNOWN_SYMBOLS[cleanSymbol];
 
-                // 2. Use Yahoo Finance — free, no API key, same source used for prices
-                const endpoints = [
-                    `https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`,
-                    `https://query2.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`,
-                    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`)}`,
-                    `https://corsproxy.io/?${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${cleanSymbol}?interval=1d&range=1d`)}`,
-                ];
-                for (const url of endpoints) {
-                    try {
-                        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
-                        if (!response.ok) continue;
+                // 2. Use Claude API — works server-side, no CORS issues
+                try {
+                    const response = await fetch('https://api.anthropic.com/v1/messages', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model: 'claude-sonnet-4-5-20250929',
+                            max_tokens: 60,
+                            messages: [{
+                                role: 'user',
+                                content: `What is the full company or fund name for the stock/ETF ticker symbol "${cleanSymbol}"? Reply with ONLY the name, nothing else. If you don't know, reply with exactly: UNKNOWN`
+                            }]
+                        })
+                    });
+                    if (response.ok) {
                         const data = await response.json();
-                        const meta = data?.chart?.result?.[0]?.meta;
-                        const name = meta?.longName || meta?.shortName;
-                        if (name && name.trim().length > 1) return name.trim();
-                    } catch (e) {
-                        // try next endpoint
+                        const name = data?.content?.[0]?.text?.trim();
+                        if (name && name !== 'UNKNOWN' && name.length > 1 && !name.toLowerCase().includes("don't know") && !name.toLowerCase().includes("cannot")) {
+                            return name;
+                        }
                     }
+                } catch (e) {
+                    console.warn('Claude API name lookup failed:', e.message);
                 }
 
                 return null;
@@ -378,9 +383,8 @@
                         }
                         
                         if (currentPrice && currentPrice > 0) {
-                            const companyName = result?.meta?.longName || result?.meta?.shortName || null;
                             console.log(`Got price for ${symbol}: $${currentPrice}, prev close: $${previousClose}`);
-                            return { currentPrice, previousClose, companyName };
+                            return { currentPrice, previousClose };
                         }
                     } catch (e) {
                         // silently try next
@@ -425,9 +429,8 @@
                     // Fetch name for ALL trades with this symbol that don't have a name (not just open)
                     const tradesNeedingName = updatedTrades.filter(t => t.symbol === symbol && (!t.name || t.name.trim() === ''));
                     if (tradesNeedingName.length > 0) {
-                        // Prefer the name already returned by the price fetch (free, no extra call)
-                        const nameFromPrice = priceData?.companyName;
-                        const name = nameFromPrice || await fetchSymbolName(symbol);
+                        console.log(`Fetching name for ${symbol} (${tradesNeedingName.length} trades need it)`);
+                        const name = await fetchSymbolName(symbol);
                         if (name) {
                             console.log(`Got name: ${name}, updating trades`);
                             tradesNeedingName.forEach(trade => {
@@ -932,9 +935,15 @@
                 const totalProfit = totalCapitalGains + totalDividends;
                 
                 const totalFees = tradesList.reduce((sum, t) => sum + t.fees, 0);
-                const totalWins = closedTrades.filter(t => t.profit > 0).length;
-                const totalLosses = closedTrades.filter(t => t.profit < 0).length;
+                const winningTrades = closedTrades.filter(t => t.profit > 5);
+                const losingTrades = closedTrades.filter(t => t.profit < -5);
+                const evenTrades = closedTrades.filter(t => t.profit >= -5 && t.profit <= 5);
+                const totalWins = winningTrades.length;
+                const totalLosses = losingTrades.length;
+                const totalEvens = evenTrades.length;
                 const winRate = totalWins + totalLosses > 0 ? (totalWins / (totalWins + totalLosses)) * 100 : 0;
+                const avgWin = totalWins > 0 ? winningTrades.reduce((sum, t) => sum + t.profit, 0) / totalWins : 0;
+                const avgLoss = totalLosses > 0 ? losingTrades.reduce((sum, t) => sum + t.profit, 0) / totalLosses : 0;
                 let unrealizedPL = 0;
                 openTrades.forEach(trade => {
                     const currentPrice = manualPrices[trade.symbol] || currentPrices[trade.symbol] || trade.entryPrice;
@@ -973,10 +982,13 @@
                     totalDividends, 
                     totalFees, 
                     winRate,
+                    avgWin,
+                    avgLoss,
                     totalTrades: closedTrades.length, 
                     openPositions: openTrades.length, 
                     wins: totalWins, 
                     losses: totalLosses,
+                    evens: totalEvens,
                     todaysPL,
                     costBasis,
                     marketValue
@@ -1386,22 +1398,39 @@
                                             </div>
                                         </div>
                                         <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Dividends</div>
-                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: T.blue }}>${metrics.totalDividends.toFixed(2)}</div>
-                                        </div>
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Win Rate</div>
-                                            <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.winRate.toFixed(1)}%</div>
-                                            <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.25rem' }}>{metrics.wins}W / {metrics.losses}L</div>
-                                        </div>
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
                                             <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Trades</div>
                                             <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.totalTrades}</div>
                                             <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.25rem' }}>{metrics.openPositions} open</div>
                                         </div>
                                         <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Fees</div>
-                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: T.red }}>${metrics.totalFees.toFixed(2)}</div>
+                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Win Rate</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700' }}>{metrics.winRate.toFixed(1)}%</div>
+                                            <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.25rem' }}>
+                                                <span style={{ color: T.green }}>{metrics.wins}W</span>
+                                                {' / '}
+                                                <span style={{ color: T.red }}>{metrics.losses}L</span>
+                                                {metrics.evens > 0 && <><span style={{ color: T.textMuted }}> / {metrics.evens}x</span></>}
+                                            </div>
+                                        </div>
+                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                                            <div>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Win</div>
+                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.green }}>{metrics.wins > 0 ? `+$${metrics.avgWin.toFixed(2)}` : '$0.00'}</div>
+                                            </div>
+                                            <div style={{ borderTop: `1px solid ${T.borderStrong}`, paddingTop: '0.85rem', marginTop: '0.85rem' }}>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Loss</div>
+                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.red }}>{metrics.losses > 0 ? `$${metrics.avgLoss.toFixed(2)}` : '$0.00'}</div>
+                                            </div>
+                                        </div>
+                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                                            <div>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Fees</div>
+                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.red }}>${metrics.totalFees.toFixed(2)}</div>
+                                            </div>
+                                            <div style={{ borderTop: `1px solid ${T.borderStrong}`, paddingTop: '0.85rem', marginTop: '0.85rem' }}>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Dividends</div>
+                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.blue }}>${metrics.totalDividends.toFixed(2)}</div>
+                                            </div>
                                         </div>
                                     </div>
 
@@ -2185,10 +2214,10 @@
                                                     {trade.dividend > 0 && <div style={{ fontSize: '0.7rem', color: T.blue, marginTop: '2px' }}>+${trade.dividend.toFixed(2)} div</div>}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    <span style={{ padding: '0.25rem 0.75rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: '600',
-                                                        background: isOpen ? T.blueBg : (liveProfit >= 0 ? T.greenBgDim : T.redBg),
-                                                        color: isOpen ? T.blue : (liveProfit >= 0 ? T.green : T.red) }}>
-                                                        {isOpen ? 'OPEN' : (liveProfit >= 0 ? 'WIN' : 'LOSS')}
+                                                    <span style={{ padding: '0.25rem 0.75rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: '600', display: 'inline-block', minWidth: '52px', textAlign: 'center', letterSpacing: '-0.02em',
+                                                        background: isOpen ? T.blueBg : (liveProfit >= -5 && liveProfit <= 5 ? T.borderStrong : (liveProfit > 5 ? T.greenBgDim : T.redBg)),
+                                                        color: isOpen ? T.blue : (liveProfit >= -5 && liveProfit <= 5 ? T.textMuted : (liveProfit > 5 ? T.green : T.red)) }}>
+                                                        {isOpen ? 'OPEN' : (liveProfit >= -5 && liveProfit <= 5 ? 'EVEN' : (liveProfit > 5 ? 'WIN' : 'LOSS'))}
                                                     </span>
                                                 </td>
                                                 <td style={{ padding: '1rem', textAlign: 'center' }}>
