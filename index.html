@@ -105,6 +105,14 @@
                 exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: '', direction: 'long'
             });
             const [showPartialExit, setShowPartialExit] = useState(false);
+            
+            // Helper function to reset form to default values
+            const resetFormData = () => {
+                setFormData({
+                    symbol: '', name: '', qty: '', entryPrice: '', entryDate: new Date().toISOString().split('T')[0],
+                    exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: '', direction: 'long'
+                });
+            };
             const [tradeActivityExpanded, setTradeActivityExpanded] = useState(false);
             const [partialExitForm, setPartialExitForm] = useState({
                 qty: '', exitPrice: '', exitDate: new Date().toISOString().split('T')[0]
@@ -681,8 +689,7 @@
                 };
                 await saveTrades([...tradesRef.current, newTrade]);
                 setShowAddTrade(false);
-                setFormData({ symbol: '', name: '', qty: '', entryPrice: '', entryDate: new Date().toISOString().split('T')[0],
-                    exitDate: '', exitPrice: '', fees: '0', profit: '0', dividend: '0', notes: '', direction: 'long' });
+                resetFormData();
             };
 
             const handleDeleteTrade = async (id) => {
@@ -1350,7 +1357,7 @@
                                     <div style={{ fontSize: '1.5rem', fontWeight: '700', marginBottom: '1rem' }}>No trades yet</div>
                                     <div style={{ fontSize: '1rem', color: T.textMuted, marginBottom: '2rem' }}>Upload a CSV or add your first trade manually</div>
                                     <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-                                        <button onClick={() => setShowAddTrade(true)} style={{ background: T.raisedBg, color: T.textPrimary, border: `1px solid ${T.borderStrong}`, padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <button onClick={() => { resetFormData(); setShowAddTrade(true); }} style={{ background: T.raisedBg, color: T.textPrimary, border: `1px solid ${T.borderStrong}`, padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
                                             <Plus size={20} /> Add Trade
                                         </button>
                                         <button onClick={() => setShowCSVUpload(true)} style={{ background: T.raisedBg, color: T.blue, border: `1px solid ${T.borderStrong}`, padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1366,13 +1373,25 @@
                                 <>
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
                                         <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Today's P/L</div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Today's P/L</div>
+                                                <button onClick={fetchCurrentPrices} disabled={fetchingPrices} title="Refresh live prices" style={{ background: 'transparent', border: 'none', color: fetchingPrices ? T.textFaint : T.blue, cursor: fetchingPrices ? 'not-allowed' : 'pointer', fontSize: '0.85rem', padding: 0 }}>
+                                                    {fetchingPrices ? '⟳' : '↻'}
+                                                </button>
+                                            </div>
                                             <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.todaysPL >= 0 ? T.green : T.red }}>
                                                 {metrics.todaysPL >= 0 ? '+' : ''}${metrics.todaysPL.toFixed(2)}
                                             </div>
                                             <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.5rem' }}>
                                                 Intraday Movement
                                             </div>
+                                        </div>
+                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
+                                            <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Unrealized P/L</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.unrealizedPL >= 0 ? T.green : T.red }}>
+                                                {metrics.unrealizedPL >= 0 ? '+' : ''}${metrics.unrealizedPL.toFixed(2)}
+                                            </div>
+                                            {fetchingPrices && <div style={{ fontSize: '0.7rem', color: T.textFaint, marginTop: '0.25rem' }}>Fetching live prices...</div>}
                                         </div>
                                         <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
                                             <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Realized Profit</div>
@@ -1387,20 +1406,6 @@
                                                 ${metrics.totalProfit.toFixed(2)}
                                             </div>
                                             <div style={{ fontSize: '0.75rem', color: T.textMuted, marginTop: '0.5rem' }}>Incl. ${metrics.totalDividends.toFixed(2)} Dividends</div>
-                                        </div>
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}` }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                <div style={{ fontSize: '0.85rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Unrealized P/L</div>
-                                                <button onClick={fetchCurrentPrices} disabled={fetchingPrices} title="Refresh live prices" style={{ background: 'transparent', border: 'none', color: fetchingPrices ? T.textFaint : T.blue, cursor: fetchingPrices ? 'not-allowed' : 'pointer', fontSize: '0.85rem', padding: 0 }}>
-                                                    {fetchingPrices ? '⟳' : '↻'}
-                                                </button>
-                                            </div>
-                                            <div style={{ fontSize: '2rem', fontWeight: '700', color: metrics.unrealizedPL >= 0 ? T.green : T.red }}>
-                                                {metrics.unrealizedPL >= 0 ? '+' : ''}${metrics.unrealizedPL.toFixed(2)}
-                                            </div>
-                                            <div style={{ fontSize: '0.7rem', color: T.textFaint, marginTop: '0.25rem' }}>
-                                                {fetchingPrices ? 'Fetching live prices...' : 'Click ↻ to refresh'}
-                                            </div>
                                         </div>
                                         {(() => {
                                             const dmMono = "'DM Mono', monospace";
@@ -1544,24 +1549,26 @@
                                                 </div>
                                             );
                                         })()}
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                                            <div>
-                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Win</div>
-                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.green }}>{metrics.wins > 0 ? `+$${metrics.avgWin.toFixed(2)}` : '$0.00'}</div>
+                                        {/* Avg Win / Avg Loss - Stacked Separate Cards */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                            <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Win</div>
+                                                <div style={{ fontSize: '2rem', fontWeight: '700', color: T.green, marginTop: 'auto' }}>{metrics.wins > 0 ? `+$${metrics.avgWin.toFixed(2)}` : '$0.00'}</div>
                                             </div>
-                                            <div style={{ borderTop: `1px solid ${T.borderStrong}`, paddingTop: '0.85rem', marginTop: '0.85rem' }}>
-                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Loss</div>
-                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.red }}>{metrics.losses > 0 ? `$${metrics.avgLoss.toFixed(2)}` : '$0.00'}</div>
+                                            <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Avg Loss</div>
+                                                <div style={{ fontSize: '2rem', fontWeight: '700', color: T.red, marginTop: 'auto' }}>{metrics.losses > 0 ? `$${metrics.avgLoss.toFixed(2)}` : '$0.00'}</div>
                                             </div>
                                         </div>
-                                        <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                                            <div>
-                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Fees</div>
-                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.red }}>${metrics.totalFees.toFixed(2)}</div>
+                                        {/* Total Dividends / Total Fees - Stacked Separate Cards (Dividends on top) */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                            <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Dividends</div>
+                                                <div style={{ fontSize: '2rem', fontWeight: '700', color: T.blue, marginTop: 'auto' }}>${metrics.totalDividends.toFixed(2)}</div>
                                             </div>
-                                            <div style={{ borderTop: `1px solid ${T.borderStrong}`, paddingTop: '0.85rem', marginTop: '0.85rem' }}>
-                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.25rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Dividends</div>
-                                                <div style={{ fontSize: '1.6rem', fontWeight: '700', color: T.blue }}>${metrics.totalDividends.toFixed(2)}</div>
+                                            <div style={{ background: T.panelBg, borderRadius: '8px', padding: '1.5rem', border: `1px solid ${T.border}`, flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ fontSize: '0.75rem', color: T.textMuted, marginBottom: '0.5rem', textTransform: 'uppercase', fontWeight: '600' }}>Total Fees</div>
+                                                <div style={{ fontSize: '2rem', fontWeight: '700', color: T.red, marginTop: 'auto' }}>${metrics.totalFees.toFixed(2)}</div>
                                             </div>
                                         </div>
                                     </div>
@@ -1677,7 +1684,7 @@
 
                                     <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap', alignItems: 'center' }}>
                                         <button onClick={() => setView('trades')} style={{ background: T.green, color: T.pageBg, border: 'none', padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>View All Trades</button>
-                                        <button onClick={() => setShowAddTrade(true)} style={{ background: T.raisedBg, color: T.textPrimary, border: `1px solid ${T.borderStrong}`, padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>Add Trade</button>
+                                        <button onClick={() => { resetFormData(); setShowAddTrade(true); }} style={{ background: T.raisedBg, color: T.textPrimary, border: `1px solid ${T.borderStrong}`, padding: '1rem 2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>Add Trade</button>
                                         
                                         {/* Settings Menu */}
                                         <div style={{ position: 'relative' }}>
@@ -1891,7 +1898,7 @@
                                 <div style={{ background: T.surfaceBg, borderRadius: '8px', padding: '2rem', maxWidth: '540px', width: '100%', border: `1px solid ${T.border}`, maxHeight: '90vh', overflow: 'auto' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
                                         <h3 style={{ margin: 0, fontSize: '1.5rem' }}>ADD TRADE</h3>
-                                        <button onClick={() => setShowAddTrade(false)} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
+                                        <button onClick={() => { setShowAddTrade(false); resetFormData(); }} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
                                     </div>
 
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -2032,7 +2039,7 @@
                                 </h1>
                             </div>
                             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                                <button onClick={() => setShowAddTrade(true)} style={{ background: T.green, color: T.pageBg, border: 'none', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Plus size={20} /> Add Trade</button>
+                                <button onClick={() => { resetFormData(); setShowAddTrade(true); }} style={{ background: T.green, color: T.pageBg, border: 'none', padding: '0.75rem 1.5rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Plus size={20} /> Add Trade</button>
                                 <div style={{ position: 'relative' }}>
                                     <button onClick={() => setShowDataMenu(v => !v)} style={{ background: showDataMenu ? T.borderMid : T.raisedBg, border: `1px solid ${T.borderStrong}`, color: T.textPrimary, padding: '0.75rem 1.1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '1rem' }}>▾</button>
                                     {showDataMenu && (
@@ -2398,7 +2405,7 @@
                             <div style={{ background: T.surfaceBg, borderRadius: '8px', padding: '2rem', maxWidth: '540px', width: '100%', border: `1px solid ${T.border}`, maxHeight: '90vh', overflow: 'auto' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
                                     <h3 style={{ margin: 0, fontSize: '1.5rem' }}>ADD TRADE</h3>
-                                    <button onClick={() => setShowAddTrade(false)} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
+                                    <button onClick={() => { setShowAddTrade(false); resetFormData(); }} style={{ background: 'transparent', border: 'none', color: T.textMuted, cursor: 'pointer' }}><X size={24} /></button>
                                 </div>
 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -2431,13 +2438,13 @@
                                     </div></div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Price *</label>
-                                            <input type="number" step="0.01" placeholder="150.25" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <input type="number" step="0.01" placeholder="0.00" value={formData.entryPrice} onChange={(e) => setFormData({...formData, entryPrice: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Entry Date *</label>
                                             <input type="date" value={formData.entryDate} onChange={(e) => setFormData({...formData, entryDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Price</label>
-                                            <input type="number" step="0.01" placeholder="160.50" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
+                                            <input type="number" step="0.01" placeholder="0.00" value={formData.exitPrice} onChange={(e) => { const newExitPrice = e.target.value; setFormData({...formData, exitPrice: newExitPrice, exitDate: newExitPrice && !formData.exitDate ? new Date().toISOString().split("T")[0] : formData.exitDate}); }} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         <div><label style={{ display: 'block', marginBottom: '0.5rem', color: T.textSecondary, fontSize: '0.85rem', textTransform: 'uppercase', fontWeight: '600' }}>Exit Date</label>
                                             <input type="date" value={formData.exitDate} onChange={(e) => setFormData({...formData, exitDate: e.target.value})} style={{ width: '100%', padding: '0.75rem', background: T.panelBg, border: `1px solid ${T.borderMid}`, borderRadius: '4px', color: T.textPrimary }} /></div>
                                         </div>
